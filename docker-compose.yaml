@@ -2,16 +2,15 @@ version: '3.8'
 
 services:
   hermes:
-    build: .
+    image: nousresearch/hermes-agent:latest
     container_name: hermes
     restart: unless-stopped
-    # Explicitly run gateway with the API enabled for health checks
-    command: gateway run --platform discord --port 8642
+    command: gateway run --platform discord
     ports:
-      - "8642:8642"
-      - "9119:9119"
+      - "8642:8642" # API gateway & health
+      - "9119:9119" # Dashboard
     volumes:
-      - hermes_home:/opt/data
+      - hermes_data:/opt/data
     environment:
       - HERMES_DASHBOARD=1
       - DISCORD_TOKEN=${DISCORD_TOKEN}
@@ -25,4 +24,4 @@ services:
           cpus: "2.0"
 
 volumes:
-  hermes_home:
+  hermes_data:
