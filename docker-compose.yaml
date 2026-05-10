@@ -6,24 +6,21 @@ services:
     container_name: hermes-agent
     restart: always
     environment:
-      # Discord Auth
       - DISCORD_TOKEN=${DISCORD_TOKEN}
-      
-      # Model Auth
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      
-      # Memory Auth
       - HONCHO_API_KEY=${HONCHO_API_KEY}
-      
-      # Optional: The specific profile name for this instance
+      - GATEWAY_SECRET=${GATEWAY_SECRET}
       - HERMES_PROFILE=career-agent
     volumes:
-      # Keep your memory, history, and config persistent!
       - hermes_data:/home/hermes/.hermes
-      # Sync your career agent skills repository
       - ./skills:/home/hermes/.hermes/skills
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   hermes_data:

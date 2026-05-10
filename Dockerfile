@@ -1,7 +1,7 @@
 # Hermes Agent Dockerfile for Coolify
 FROM nikolaik/python-nodejs:python3.11-nodejs20
 
-# Install dependencies
+# Install dependencies needed for Hermes and MCP
 RUN pip install mcp honcho-ai-sdk
 
 # Create a non-root user
@@ -12,8 +12,6 @@ WORKDIR /home/hermes
 # Create directory for persistent hermes config
 RUN mkdir -p /home/hermes/.hermes
 
-# Hermes runs on 8080 by default for the gateway
-EXPOSE 8080
-
 # Start hermes with discord enabled
-CMD ["hermes", "gateway", "--platform", "discord"]
+# We use --port 8080 as Coolify defaults to this for internal health checks
+CMD ["hermes", "gateway", "run", "--platform", "discord", "--port", "8080"]
