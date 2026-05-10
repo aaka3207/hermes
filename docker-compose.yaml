@@ -5,7 +5,8 @@ services:
     image: nousresearch/hermes-agent:latest
     container_name: hermes
     restart: unless-stopped
-    command: gateway run --platform discord
+    # Correct official command for Discord gateway
+    command: gateway discord
     ports:
       - "8642:8642" # API gateway & health
       - "9119:9119" # Dashboard
@@ -13,8 +14,10 @@ services:
       - hermes_data:/opt/data
     environment:
       - HERMES_DASHBOARD=1
+      - API_SERVER_ENABLED=true
+      - API_SERVER_HOST=0.0.0.0
       - DISCORD_TOKEN=${DISCORD_TOKEN}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+
       - HONCHO_API_KEY=${HONCHO_API_KEY}
       - GATEWAY_SECRET=${GATEWAY_SECRET}
     deploy:
