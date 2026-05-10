@@ -2,24 +2,26 @@ version: '3.8'
 
 services:
   hermes:
-    build: .
-    container_name: hermes-master
-    restart: always
+    image: ghcr.io/nousresearch/hermes-agent:latest
+    container_name: hermes
+    restart: unless-stopped
+    command: gateway run --platform discord
+    ports:
+      - "8642:8642" # Official Gateway Port
+      - "9119:9119" # Official Dashboard Port
+    volumes:
+      - hermes_home:/opt/data
     environment:
+      - HERMES_DASHBOARD=1
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - HONCHO_API_KEY=${HONCHO_API_KEY}
       - GATEWAY_SECRET=${GATEWAY_SECRET}
-      - HERMES_PROFILE=default
-    volumes:
-      - hermes_home:/home/hermes/.hermes
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
 
 volumes:
   hermes_home:
