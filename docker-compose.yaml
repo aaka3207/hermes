@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  hermes-career-agent:
+    build: .
+    container_name: hermes-agent
+    restart: always
+    environment:
+      # Discord Auth
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      
+      # Model Auth
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      
+      # Memory Auth
+      - HONCHO_API_KEY=${HONCHO_API_KEY}
+      
+      # Optional: The specific profile name for this instance
+      - HERMES_PROFILE=career-agent
+    volumes:
+      # Keep your memory, history, and config persistent!
+      - hermes_data:/home/hermes/.hermes
+      # Sync your career agent skills repository
+      - ./skills:/home/hermes/.hermes/skills
+    ports:
+      - "8080:8080"
+
+volumes:
+  hermes_data:
