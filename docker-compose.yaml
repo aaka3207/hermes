@@ -2,13 +2,14 @@ version: '3.8'
 
 services:
   hermes:
-    image: ghcr.io/nousresearch/hermes-agent:latest
+    build: .
     container_name: hermes
     restart: unless-stopped
-    command: gateway run --platform discord
+    # Explicitly run gateway with the API enabled for health checks
+    command: gateway run --platform discord --port 8642
     ports:
-      - "8642:8642" # Official Gateway Port
-      - "9119:9119" # Official Dashboard Port
+      - "8642:8642"
+      - "9119:9119"
     volumes:
       - hermes_home:/opt/data
     environment:
