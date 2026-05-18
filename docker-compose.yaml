@@ -14,6 +14,7 @@ services:
     environment:
       - HERMES_DASHBOARD=1
       - API_SERVER_ENABLED=true
+      - MEM0_API_KEY=${MEM0_API_KEY}
       - API_SERVER_HOST=0.0.0.0
       - SEARXNG_URL=${SEARXNG_URL}
       - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY}
