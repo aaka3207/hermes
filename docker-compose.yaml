@@ -2,7 +2,10 @@ version: '3.8'
 
 services:
   hermes:
-    image: nousresearch/hermes-agent:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aaka3207/hermes-claude-code:latest
     container_name: hermes
     restart: unless-stopped
     command: gateway run
