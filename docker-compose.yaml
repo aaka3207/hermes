@@ -2,7 +2,8 @@ version: '3.8'
 
 services:
   hermes:
-    image: nousresearch/hermes-agent:latest
+    build: .
+    image: hermes-agent
     container_name: hermes
     restart: unless-stopped
     command: gateway run
