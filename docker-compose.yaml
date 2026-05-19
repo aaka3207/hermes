@@ -38,3 +38,21 @@ services:
         limits:
           memory: 4G
           cpus: "2.0"
+
+  syncthing:
+    build: .
+    image: hermes-agent
+    container_name: hermes-syncthing
+    restart: unless-stopped
+    volumes:
+      - ~/.hermes:/opt/data
+    ports:
+      - "127.0.0.1:8385:8384"
+      - "22001:22000/tcp"
+      - "22001:22000/udp"
+    command:
+      - syncthing
+      - --home=/opt/data/syncthing/config
+      - --gui-address=0.0.0.0:8384
+      - --no-browser
+      - --no-restart
