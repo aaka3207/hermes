@@ -49,7 +49,7 @@ services:
     environment:
       - STNOUPGRADE=1
     ports:
-      - "127.0.0.1:8385:8384"
+      - "8385:8384"
       - "22001:22000/tcp"
       - "22001:22000/udp"
     command:
