@@ -40,22 +40,26 @@ services:
           cpus: "2.0"
 
   syncthing:
-    build: .
-    image: hermes-agent
+    image: lscr.io/linuxserver/syncthing:latest
     container_name: hermes-syncthing
     restart: unless-stopped
-    volumes:
-      - ~/.hermes:/opt/data
     environment:
-      - STNOUPGRADE=1
+      - PUID=10000
+      - PGID=10000
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - syncthing_config:/config
+      - ~/.hermes:/data1
     ports:
-      - "8385:8384"
-      - "22001:22000/tcp"
-      - "22001:22000/udp"
-    command:
-      - syncthing
-      - serve
-      - --home=/opt/data/syncthing/config
-      - --gui-address=0.0.0.0:8384
-      - --no-browser
-      - --no-restart
+      - "8384:8384"
+      - "22000:22000/tcp"
+      - "22000:22000/udp"
+      - "21027:21027/udp"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8384/"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+
+volumes:
+  syncthing_config:
