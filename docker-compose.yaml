@@ -7,6 +7,9 @@ services:
     container_name: hermes
     restart: unless-stopped
     command: gateway run
+    depends_on:
+      syncthing:
+        condition: service_healthy
     ports:
       - "8642:8642"   # gateway API
       - "9119:9119"   # dashboard (only reached when HERMES_DASHBOARD=1)
