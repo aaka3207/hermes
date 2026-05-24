@@ -36,6 +36,14 @@ services:
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
       - SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+    healthcheck:
+      # /health is served by the API server on 8642 (API_SERVER_ENABLED=true).
+      # Returns {"status": "ok", "platform": "hermes-agent"}.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8642/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s   # gateway boot + skill load + API server bind
     deploy:
       resources:
         limits:
