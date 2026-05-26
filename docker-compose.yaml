@@ -36,6 +36,10 @@ services:
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
       - SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      # Mnemosyne memory provider: pin its SQLite store to the persistent
+      # volume (/opt/data). Explicit path avoids expanduser("~/.hermes")
+      # landing in ephemeral /root/.hermes if invoked in a root context.
+      - MNEMOSYNE_DATA_DIR=/opt/data/mnemosyne/data
     healthcheck:
       # /health is served by the API server on 8642 (API_SERVER_ENABLED=true).
       # Returns {"status": "ok", "platform": "hermes-agent"}.
