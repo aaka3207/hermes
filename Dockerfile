@@ -14,7 +14,7 @@ RUN apt-get update && \
 # python-version-specific site-packages path and dangles if the base image
 # bumps Python. Memory DB lives on the volume via MNEMOSYNE_DATA_DIR (compose).
 # Activate by setting `memory.provider: mnemosyne` in config.yaml.
-RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-memory[embeddings]==3.0.0" && \
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-memory[embeddings]==3.0.0" sqlite-vec==0.1.9 && \
     ln -s "$(/opt/hermes/.venv/bin/python -c 'import importlib.util as u; print(u.find_spec("hermes_memory_provider").submodule_search_locations[0])')" \
         /opt/hermes/plugins/memory/mnemosyne && \
     /opt/hermes/.venv/bin/python -c "import importlib.util as u; assert u.find_spec('mnemosyne'), 'mnemosyne import failed'; print('mnemosyne provider linked OK')"
