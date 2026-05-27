@@ -61,6 +61,7 @@ Everything here is in the `Dockerfile`, layered onto `nousresearch/hermes-agent:
 | `mnemosyne-memory[embeddings]==3.0.0` + `sqlite-vec==0.1.9` (uv pip) | Local-first SQLite memory provider with semantic vector search | Bundled as a first-class provider (see Memory) |
 | **openai SDK null-guard** (build-time patch, [#17](https://github.com/aaka3207/hermes/pull/17)) | Stops every Codex call from crashing on a null `response.output` | Patches the installed `openai` SDK. **Temporary** — remove when fixed upstream (see Operational notes) |
 | **Mnemosyne host-LLM lazy-register** (build-time patch, [#18](https://github.com/aaka3207/hermes/pull/18)) | Makes Mnemosyne actually route memory ops through Codex instead of falling back to lossy non-LLM summaries | Patches the installed `mnemosyne` package. **Temporary** — remove when fixed upstream (see Operational notes) |
+| **Codex transport tool-less fix** (build-time patch) | Stops the transport sending an empty `tools` field, which the Codex backend answers with a null `response.output` | Patches `/opt/hermes/agent/transports/codex.py` (the root-cause companion to the null-guard). **Temporary** — remove when fixed upstream (see Operational notes) |
 
 ### Why packages are baked into the image, not installed at runtime
 
@@ -299,11 +300,18 @@ chown finishes before hermes reads `config.yaml`, avoiding a permission race on 
 
 ### Build-time patches against Codex (temporary)
 
-Two `Dockerfile` patches work around problems with the ChatGPT Codex backend
-(`chatgpt.com/backend-api/codex`, provider `openai-codex`). Both are idempotent and non-fatal
+Three `Dockerfile` patches work around problems with the ChatGPT Codex backend
+(`chatgpt.com/backend-api/codex`, provider `openai-codex`). All are idempotent and non-fatal
 (if their anchor text moves, they print a warning and skip rather than break the build). They are
-related but distinct: the first stops Codex from **crashing**; the second makes Mnemosyne actually
-**use** Codex. Remove each when its upstream fix lands.
+related but distinct: (a) stops Codex from **crashing**, (c) stops it **producing** the null output
+in the first place, and (b) makes Mnemosyne actually **use** Codex. Remove each when its upstream
+fix lands.
+
+> Confirmed community-wide (Nous "CODEX/OpenAI help megathread"): an OpenAI backend change began
+> streaming `response.output = null`. Nous shipped an official fix, but as of writing it is **not**
+> in the `nousresearch/hermes-agent:latest` Docker image — Docker/VPS users (us included) still get
+> the unpatched transport, so we patch it ourselves. The accepted fix is two parts: the SDK
+> null-guard (a) and the transport tool-less fix (c).
 
 - **(a) openai SDK null-guard** ([#17](https://github.com/aaka3207/hermes/pull/17), merged).
   Codex began streaming events with `response.output = None`, which violates the OpenAI API
@@ -328,6 +336,16 @@ related but distinct: the first stops Codex from **crashing**; the second makes 
   LLM-extracted facts, so extraction + consolidation run on Codex (on the user's subscription, no
   per-call cost) instead of AAAK/regex. Note this patches a root-owned pip package, so the step runs
   at build time as root. **Remove this patch when Mnemosyne fixes gateway registration upstream.**
+
+- **(c) Codex transport tool-less fix.** Root-cause companion to (a). The transport
+  (`/opt/hermes/agent/transports/codex.py`) always put `"tools": response_tools` into the request
+  kwargs — even when `response_tools` was empty. The Codex backend answers an empty `tools` field by
+  streaming `response.output = None`, which is exactly what (a) then has to defend against. The
+  patch moves `tools` *inside* the existing `if response_tools:` guard, so tool-less calls omit the
+  field entirely and the backend returns real output. The main agent loop always carries tools so it
+  was unaffected; this mainly cleans up tool-less calls (memory consolidation / summaries via the
+  auxiliary client). Mirrors the community/Nous "transport patch". **Remove when the upstream image
+  ships the fixed transport** (verify with `grep -n 'kwargs\["tools"\]' /opt/hermes/agent/transports/codex.py`).
 
 ---
 
