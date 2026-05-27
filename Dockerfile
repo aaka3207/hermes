@@ -45,3 +45,48 @@ else:
     print("WARNING: openai parse_response anchor not found (count=%d); "
           "skipping Codex null-guard patch — review if Codex breaks." % s.count(old))
 PY
+
+# Patch Mnemosyne to lazily (re)register the Hermes/Codex host LLM backend.
+# The provider registers it in initialize(), but the live gateway doesn't keep
+# it registered for the consolidation/extraction paths (module-identity /
+# lifecycle quirk), so memory ops silently fall back to non-LLM "AAAK"
+# summaries + regex facts. This makes the host-backend gate self-heal: if no
+# backend is registered when an LLM call is attempted, register it on the spot
+# (register_hermes_host_llm is idempotent). Result: consolidation + fact
+# extraction use Codex via Hermes' auxiliary client instead of AAAK/regex.
+# Idempotent + non-fatal; remove if/when Mnemosyne fixes gateway registration.
+RUN /opt/hermes/.venv/bin/python - <<'PY'
+import mnemosyne.core.local_llm as m
+f = m.__file__
+s = open(f).read()
+if "register_hermes_host_llm()" in s:
+    print("mnemosyne lazy-register already present:", f)
+else:
+    old1 = ("        from mnemosyne.core.llm_backends import get_host_llm_backend\n"
+            "        return get_host_llm_backend() is not None\n")
+    new1 = ("        from mnemosyne.core.llm_backends import get_host_llm_backend\n"
+            "        if get_host_llm_backend() is None:\n"
+            "            try:\n"
+            "                from hermes_memory_provider.hermes_llm_adapter import register_hermes_host_llm\n"
+            "                register_hermes_host_llm()\n"
+            "            except Exception:\n"
+            "                pass\n"
+            "        return get_host_llm_backend() is not None\n")
+    old2 = ("    if get_host_llm_backend() is None:\n"
+            "        return (False, None)\n"
+            "    raw = call_host_llm(\n")
+    new2 = ("    if get_host_llm_backend() is None:\n"
+            "        try:\n"
+            "            from hermes_memory_provider.hermes_llm_adapter import register_hermes_host_llm\n"
+            "            register_hermes_host_llm()\n"
+            "        except Exception:\n"
+            "            pass\n"
+            "    if get_host_llm_backend() is None:\n"
+            "        return (False, None)\n"
+            "    raw = call_host_llm(\n")
+    if s.count(old1) == 1 and s.count(old2) == 1:
+        open(f, "w").write(s.replace(old1, new1).replace(old2, new2))
+        print("patched mnemosyne lazy-register OK:", f)
+    else:
+        print("WARNING: mnemosyne anchors not found (%d/%d); skipping." % (s.count(old1), s.count(old2)))
+PY
