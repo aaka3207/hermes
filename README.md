@@ -59,6 +59,9 @@ Everything here is in the `Dockerfile`, layered onto `nousresearch/hermes-agent:
 | `hindsight-client==0.6.1` (uv pip) | Client for the self-hosted Hindsight memory server | A selectable memory provider |
 | `faster-whisper==1.2.1` (uv pip) | Local, free speech-to-text for Discord voice | Pinned to the exact version Hermes' lazy-deps expects |
 | `mnemosyne-memory[embeddings]==3.0.0` + `sqlite-vec==0.1.9` (uv pip) | Local-first SQLite memory provider with semantic vector search | Bundled as a first-class provider (see Memory) |
+| **openai SDK null-guard** (build-time patch, [#17](https://github.com/aaka3207/hermes/pull/17)) | Stops every Codex call from crashing on a null `response.output` | Patches the installed `openai` SDK. **Temporary** — remove when fixed upstream (see Operational notes) |
+| **Mnemosyne host-LLM lazy-register** (build-time patch, [#18](https://github.com/aaka3207/hermes/pull/18)) | Makes Mnemosyne actually route memory ops through Codex instead of falling back to lossy non-LLM summaries | Patches the installed `mnemosyne` package. **Temporary** — remove when fixed upstream (see Operational notes) |
+| **Codex transport tool-less fix** (build-time patch) | Stops the transport sending an empty `tools` field, which the Codex backend answers with a null `response.output` | Patches `/opt/hermes/agent/transports/codex.py` (the root-cause companion to the null-guard). **Temporary** — remove when fixed upstream (see Operational notes) |
 
 ### Why packages are baked into the image, not installed at runtime
 
@@ -155,6 +158,84 @@ Voice is config-driven; the dependencies are baked into the image.
 
 ---
 
+## Camofox browser companion
+
+The agent can drive a real, anti-detection browser — [Camoufox](https://camoufox.com), a Firefox
+fork that spoofs fingerprints at the C++ level — with a human-in-the-loop VNC console for
+interactive logins (so the agent can later reuse the authenticated session).
+
+This is **not** part of this repo's `docker-compose.yaml`. It runs as its **own Coolify
+application**, built from the fork [`aaka3207/camofox-browser`](https://github.com/aaka3207/camofox-browser)
+(forked from [`jo-inc/camofox-browser`](https://github.com/jo-inc/camofox-browser)) via the repo's
+`Dockerfile.ci` (which self-downloads the Camoufox binary at build time — unlike the default
+`Dockerfile`, which needs `make fetch` first). What follows documents the companion app and how
+hermes wires up to it.
+
+> The canonical setup is this Coolify application. (An older `docs/camofox-browser.md` in this repo
+> describes a standalone `make up` / host `docker run` recipe — that is **not** how it was deployed;
+> prefer this section.)
+
+### Fork changes vs upstream
+
+1. **`camofox.config.json`** sets `vnc.enabled: true`, so the VNC apt stack (x11vnc / noVNC /
+   websockify) is installed at build time.
+2. **`lib/auth.js`** is patched so that when no API key is configured the server treats requests as
+   trusted (LAN-only deploy). Hermes sends no auth, and without this camofox returns `403` on the
+   `/tabs/:id/evaluate` endpoint for remote callers in production.
+3. **A window manager (`openbox`)** is added to the VNC stack ([fork PR #1](https://github.com/aaka3207/camofox-browser/pull/1), merged): `plugins/vnc/apt.txt` installs `openbox`, and
+   `plugins/vnc/vnc-watcher.sh` starts it on the active display once x11vnc attaches. Without a WM,
+   the Firefox window never holds X keyboard focus, so the noVNC console accepted mouse clicks but
+   **dropped all keystrokes** — making interactive logins impossible. The watcher starts openbox
+   guarded (only if present) on the same `DISPLAY`, so keyboard input now works.
+
+### Coolify configuration
+
+- **Port mappings** (host): `9377:9377` (REST API) and `6080:6080` (noVNC).
+- **Env**:
+  - `VNC_BIND=0.0.0.0` — noVNC listens on all interfaces, not just loopback.
+  - `CAMOFOX_PROFILE_DIR=/data/profiles`, `CAMOFOX_COOKIES_DIR=/data/cookies`,
+    `CAMOFOX_TRACES_DIR=/data/traces` — all on a persistent volume mounted at `/data`.
+  - `VNC_PASSWORD` — set (the console is password-protected).
+  - `BROWSER_IDLE_TIMEOUT_MS=1800000` — Camoufox idle-shuts-down after **30 min**, raised from the
+    5-min default so a manual login session has room before the display (and VNC) disappears (see
+    gotcha below).
+  - `CAMOFOX_API_KEY` — **intentionally not set** (LAN-trusted; pairs with the `lib/auth.js` patch).
+- **Exposure**: no public domain and no router port-forward. **LAN-only by design** — the noVNC
+  console can drive a browser logged into your accounts, so it must not be internet-exposed.
+
+### Wiring hermes to camofox
+
+Set `CAMOFOX_URL=http://192.168.1.100:9377` (the LAN address of the camofox app) on the **hermes**
+app, then add to `config.yaml` (edited **as the `hermes` user**, never root — see
+[Editing config.yaml safely](#editing-configyaml-safely)):
+
+```yaml
+browser:
+  camofox:
+    managed_persistence: true
+    user_id: hermes
+    session_key: default
+```
+
+`user_id` must match the `userId` used when logging in via the VNC console, so the agent inherits
+the authenticated session.
+
+### VNC console gotcha (important)
+
+The noVNC console at `http://192.168.1.100:6080/vnc.html` only works **while a browser session is
+live**. Camoufox lazy-launches and idle-shuts-down after `BROWSER_IDLE_TIMEOUT_MS`; when it's
+asleep, the Xvfb display and x11vnc (port 5900) don't exist, so clicking **Connect** gives "unable
+to connect to server" even though the page loads.
+
+To use it: **first start a session** (have the agent open a page, or `POST /tabs`), then connect
+promptly. This deploy sets `BROWSER_IDLE_TIMEOUT_MS=1800000` (30 min) so a manual login has room;
+raise further (or `0` = never) at the cost of Firefox staying resident (~350 MB). The console is
+password-protected via `VNC_PASSWORD`. Keyboard input works because the VNC stack now starts a
+window manager (openbox) — see fork change #3 above; without it the window never holds focus and
+keystrokes are dropped.
+
+---
+
 ## Configuration
 
 Runtime config lives on the volume, **not** in this repo:
@@ -216,6 +297,55 @@ chown finishes before hermes reads `config.yaml`, avoiding a permission race on 
 - **After an unclean host reboot**, Coolify's own Postgres may need a minute of WAL recovery;
   `coolify` (the app) can come up before the DB is ready and sit unhealthy — a `docker restart
   coolify` clears it.
+
+### Build-time patches against Codex (temporary)
+
+Three `Dockerfile` patches work around problems with the ChatGPT Codex backend
+(`chatgpt.com/backend-api/codex`, provider `openai-codex`). All are idempotent and non-fatal
+(if their anchor text moves, they print a warning and skip rather than break the build). They are
+related but distinct: (a) stops Codex from **crashing**, (c) stops it **producing** the null output
+in the first place, and (b) makes Mnemosyne actually **use** Codex. Remove each when its upstream
+fix lands.
+
+> Confirmed community-wide (Nous "CODEX/OpenAI help megathread"): an OpenAI backend change began
+> streaming `response.output = null`. Nous shipped an official fix, but as of writing it is **not**
+> in the `nousresearch/hermes-agent:latest` Docker image — Docker/VPS users (us included) still get
+> the unpatched transport, so we patch it ourselves. The accepted fix is two parts: the SDK
+> null-guard (a) and the transport tool-less fix (c).
+
+- **(a) openai SDK null-guard** ([#17](https://github.com/aaka3207/hermes/pull/17), merged).
+  Codex began streaming events with `response.output = None`, which violates the OpenAI API
+  contract and crashes the `openai` SDK's streaming parser with `TypeError: 'NoneType' object is
+  not iterable` at `_parsing/_responses.py` (`for output in response.output`). This broke **every**
+  Codex call — both the agent's chat loop and Mnemosyne's memory ops. It is **not** an
+  auth/quota/model issue and is **not** fixable by upgrading `openai`: the offending line is
+  byte-identical from the pinned `openai` 2.24.0 through 2.38.0, so it's an upstream backend
+  regression. The Dockerfile patches the installed SDK to read `response.output or []`. **Remove
+  this patch when NousResearch/OpenAI ship an upstream fix.**
+
+- **(b) Mnemosyne host-LLM lazy-register** ([#18](https://github.com/aaka3207/hermes/pull/18)).
+  Mnemosyne can route its memory LLM ops (fact extraction + sleep/consolidation) through Hermes'
+  authenticated auxiliary client → Codex, gated by `MNEMOSYNE_HOST_LLM_ENABLED=true` (already set).
+  Its provider registers that host backend in `initialize()`, but the live gateway does **not** keep
+  it registered for the consolidation/extraction code paths (a module-identity / lifecycle quirk):
+  `get_host_llm_backend()` returns `None` there, so memory silently falls back to a non-LLM "AAAK"
+  compression encoder (lossy) for summaries and regex triples for facts — low quality. The Dockerfile
+  patches `mnemosyne/core/local_llm.py` so the host-backend gates self-heal: if no backend is
+  registered when an LLM call is attempted, it lazily calls `register_hermes_host_llm()`
+  (idempotent) on the spot. Verified: a fresh process with no prior registration now produces clean
+  LLM-extracted facts, so extraction + consolidation run on Codex (on the user's subscription, no
+  per-call cost) instead of AAAK/regex. Note this patches a root-owned pip package, so the step runs
+  at build time as root. **Remove this patch when Mnemosyne fixes gateway registration upstream.**
+
+- **(c) Codex transport tool-less fix.** Root-cause companion to (a). The transport
+  (`/opt/hermes/agent/transports/codex.py`) always put `"tools": response_tools` into the request
+  kwargs — even when `response_tools` was empty. The Codex backend answers an empty `tools` field by
+  streaming `response.output = None`, which is exactly what (a) then has to defend against. The
+  patch moves `tools` *inside* the existing `if response_tools:` guard, so tool-less calls omit the
+  field entirely and the backend returns real output. The main agent loop always carries tools so it
+  was unaffected; this mainly cleans up tool-less calls (memory consolidation / summaries via the
+  auxiliary client). Mirrors the community/Nous "transport patch". **Remove when the upstream image
+  ships the fixed transport** (verify with `grep -n 'kwargs\["tools"\]' /opt/hermes/agent/transports/codex.py`).
 
 ---
 

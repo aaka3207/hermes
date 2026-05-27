@@ -90,3 +90,40 @@ else:
     else:
         print("WARNING: mnemosyne anchors not found (%d/%d); skipping." % (s.count(old1), s.count(old2)))
 PY
+
+# Patch the Hermes Codex transport to not send `tools` when there are none.
+# Root-cause companion to the openai null-guard above: when a Codex call has no
+# tools, the transport still puts `"tools": response_tools` (an empty list / None)
+# into the request kwargs. The ChatGPT Codex backend responds to that empty
+# `tools` field by streaming `response.output = None`, which is what the SDK
+# null-guard then has to defend against. Omitting `tools` entirely on tool-less
+# calls (only setting it inside the `if response_tools:` block) makes the backend
+# return real output instead — fixing the root cause, not just the crash. Mainly
+# affects tool-less calls (e.g. memory consolidation / summaries via the aux
+# client); the main agent loop always has tools so it was unaffected. This
+# matches the community/Nous "transport patch". Idempotent + non-fatal.
+# Remove once upstream nousresearch/hermes-agent ships the fixed transport.
+RUN /opt/hermes/.venv/bin/python - <<'PY'
+f = "/opt/hermes/agent/transports/codex.py"
+s = open(f).read()
+old = ('            "tools": response_tools,\n'
+       '            "store": False,\n'
+       '        }\n'
+       '        if response_tools:\n'
+       '            kwargs["tool_choice"] = "auto"\n'
+       '            kwargs["parallel_tool_calls"] = True\n')
+new = ('            "store": False,\n'
+       '        }\n'
+       '        if response_tools:\n'
+       '            kwargs["tools"] = response_tools\n'
+       '            kwargs["tool_choice"] = "auto"\n'
+       '            kwargs["parallel_tool_calls"] = True\n')
+if 'kwargs["tools"] = response_tools' in s:
+    print("codex transport patch already present:", f)
+elif s.count(old) == 1:
+    open(f, "w").write(s.replace(old, new))
+    print("patched codex transport OK:", f)
+else:
+    print("WARNING: codex transport anchor not found (count=%d); skipping — "
+          "review if Codex returns empty/null output." % s.count(old))
+PY
