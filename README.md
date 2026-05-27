@@ -181,6 +181,11 @@ hermes wires up to it.
 2. **`lib/auth.js`** is patched so that when no API key is configured the server treats requests as
    trusted (LAN-only deploy). Hermes sends no auth, and without this camofox returns `403` on the
    `/tabs/:id/evaluate` endpoint for remote callers in production.
+3. **A window manager (`openbox`)** is added to the VNC stack ([fork PR #1](https://github.com/aaka3207/camofox-browser/pull/1), merged): `plugins/vnc/apt.txt` installs `openbox`, and
+   `plugins/vnc/vnc-watcher.sh` starts it on the active display once x11vnc attaches. Without a WM,
+   the Firefox window never holds X keyboard focus, so the noVNC console accepted mouse clicks but
+   **dropped all keystrokes** — making interactive logins impossible. The watcher starts openbox
+   guarded (only if present) on the same `DISPLAY`, so keyboard input now works.
 
 ### Coolify configuration
 
@@ -190,7 +195,9 @@ hermes wires up to it.
   - `CAMOFOX_PROFILE_DIR=/data/profiles`, `CAMOFOX_COOKIES_DIR=/data/cookies`,
     `CAMOFOX_TRACES_DIR=/data/traces` — all on a persistent volume mounted at `/data`.
   - `VNC_PASSWORD` — set (the console is password-protected).
-  - `BROWSER_IDLE_TIMEOUT_MS=300000` — Camoufox idle-shuts-down after 5 min (see gotcha below).
+  - `BROWSER_IDLE_TIMEOUT_MS=1800000` — Camoufox idle-shuts-down after **30 min**, raised from the
+    5-min default so a manual login session has room before the display (and VNC) disappears (see
+    gotcha below).
   - `CAMOFOX_API_KEY` — **intentionally not set** (LAN-trusted; pairs with the `lib/auth.js` patch).
 - **Exposure**: no public domain and no router port-forward. **LAN-only by design** — the noVNC
   console can drive a browser logged into your accounts, so it must not be internet-exposed.
@@ -215,14 +222,16 @@ the authenticated session.
 ### VNC console gotcha (important)
 
 The noVNC console at `http://192.168.1.100:6080/vnc.html` only works **while a browser session is
-live**. Camoufox lazy-launches and idle-shuts-down after `BROWSER_IDLE_TIMEOUT_MS` (5 min by
-default); when it's asleep, the Xvfb display and x11vnc (port 5900) don't exist, so clicking
-**Connect** gives "unable to connect to server" even though the page loads.
+live**. Camoufox lazy-launches and idle-shuts-down after `BROWSER_IDLE_TIMEOUT_MS`; when it's
+asleep, the Xvfb display and x11vnc (port 5900) don't exist, so clicking **Connect** gives "unable
+to connect to server" even though the page loads.
 
 To use it: **first start a session** (have the agent open a page, or `POST /tabs`), then connect
-promptly. For long manual logins, raise `BROWSER_IDLE_TIMEOUT_MS` (e.g. `1800000`, or `0` =
-never) at the cost of Firefox staying resident (~350 MB). The console is password-protected via
-`VNC_PASSWORD`.
+promptly. This deploy sets `BROWSER_IDLE_TIMEOUT_MS=1800000` (30 min) so a manual login has room;
+raise further (or `0` = never) at the cost of Firefox staying resident (~350 MB). The console is
+password-protected via `VNC_PASSWORD`. Keyboard input works because the VNC stack now starts a
+window manager (openbox) — see fork change #3 above; without it the window never holds focus and
+keystrokes are dropped.
 
 ---
 
