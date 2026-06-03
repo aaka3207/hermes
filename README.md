@@ -41,9 +41,10 @@ up for deployment via Coolify.
   (`/opt/data` in hermes, `/data1` in syncthing). This is the single source of truth for config,
   memory databases, auth tokens, and caches. It persists across redeploys.
 
-Two domains front the app via the Coolify reverse proxy:
+Three domains front the app via the Coolify reverse proxy:
 - `hermes-dashboard.aakashe.org` → dashboard (port 9119)
 - `hermes-api.aakashe.org` → gateway API (port 8642)
+- `hermes-webui.aakashe.org` → WebUI (port 8787, see [WebUI](#webui-browser--phone-frontend))
 
 ---
 
@@ -139,6 +140,73 @@ Edit `config.yaml` `memory.provider` (see config notes below for *how* to edit s
 either restart hermes or let it re-read on its polling cycle. Switching does **not** migrate data —
 each provider has its own store. To carry knowledge across, either re-state durable facts in
 conversation (cleanest) or use a provider importer where one exists.
+
+---
+
+## WebUI (browser / phone frontend)
+
+[hermes-webui](https://github.com/nesquena/hermes-webui) is a browser/phone interface for the
+agent, added as the `hermes-webui` service in `docker-compose.yaml`. It runs the **stock upstream
+image** (`ghcr.io/nesquena/hermes-webui:latest`) as a **thin frontend** — it does **not** run the
+agent itself.
+
+### Why a thin frontend, not the upstream in-process default
+
+The upstream WebUI's default mode runs the agent **in-process**: it builds its *own* venv from
+plain `hermes-agent[all]` and executes chat turns there. For this deployment that path is broken by
+design — that venv would carry **neither** our build-time SDK patches (so every Codex call crashes
+on the null `response.output`, see [Build-time patches](#build-time-patches-against-codex-temporary))
+**nor** the Mnemosyne provider. So instead we bridge browser chat to the existing gateway:
+
+```
+browser ──HTTP──▶ hermes-webui  ──/v1/chat/completions──▶  hermes (gateway :8642)
+                  (thin UI)        HERMES_WEBUI_CHAT_BACKEND=gateway   (patched venv:
+                                                                        Codex + Mnemosyne live here)
+```
+
+All LLM and memory work runs in the **`hermes`** container, where the patches and providers
+actually exist. The WebUI only renders the UI, manages sessions/settings, and relays turns.
+
+### How it's wired (compose)
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `HERMES_WEBUI_CHAT_BACKEND` | `gateway` | Opt out of in-process execution; bridge to the gateway |
+| `HERMES_WEBUI_GATEWAY_BASE_URL` | `http://hermes:8642` | Gateway API server (resolved on the compose network) |
+| `HERMES_WEBUI_GATEWAY_API_KEY` | `${API_SERVER_KEY}` | Must equal the gateway's `API_SERVER_KEY` (also added to the `hermes` service) |
+| `HERMES_HOME` / `HERMES_WEBUI_STATE_DIR` | `/home/hermeswebui/.hermes[/webui]` | Shares the `~/.hermes` volume; WebUI state lands in `~/.hermes/webui` |
+| `WANTED_UID` / `WANTED_GID` | `10000` | Match the shared-volume owner (the `hermes` user) |
+| `HERMES_WEBUI_PASSWORD` | `${HERMES_WEBUI_PASSWORD}` | Gate the internet-exposed UI **(required)** |
+
+### Required `.env` keys (set in Coolify)
+
+```bash
+API_SERVER_KEY=<random-shared-secret>      # authenticates WebUI → gateway /v1/chat/completions
+HERMES_WEBUI_PASSWORD=<a-strong-password>  # login gate for the public UI
+```
+
+> ⚠️ `hermes-webui.aakashe.org` is internet-facing. **Always** set `HERMES_WEBUI_PASSWORD`. Leaving
+> it blank publishes an unauthenticated UI that can drive the agent and read memory.
+
+### Coolify domain
+
+Add a third domain on the stack pointing at the `hermes-webui` service, container port **8787**
+(same pattern as the dashboard/api domains): `hermes-webui.aakashe.org → hermes-webui:8787`.
+
+### Notes / limitations
+
+- **Provider/feature parity** comes from the gateway, not the WebUI — model list, memory, tools all
+  reflect the `hermes` container's config (`memory.provider: mnemosyne`, Codex, etc.).
+- The WebUI image **auto-upgrades** independently (`docker compose pull hermes-webui`); it carries no
+  pinned patches because it never runs the agent.
+- **Agent source is intentionally not mounted.** Upstream's two-container example mounts the agent
+  source so the WebUI can install `hermes-agent[all]` for in-process extras (model auto-detect, CLI
+  session import). We skip it: gateway-bridged chat needs none of it, and seeding a volume from the
+  image's `/opt/hermes` reintroduces the stale-on-redeploy footgun this repo bakes everything to
+  avoid. The startup log will show a benign "agent source not found → reduced functionality" warning.
+- **WebUI-side tools** (if ever enabled to run locally) would execute in the `hermes-webui` container,
+  not the gateway (upstream [#681](https://github.com/nesquena/hermes-webui/issues/681)). The
+  gateway-bridge path keeps tool execution in `hermes`, which is what we want.
 
 ---
 
@@ -377,7 +445,7 @@ Container names on the Coolify host are suffixed (e.g. `hermes-tgg4k0sc8wgocck08
 | Path | Purpose |
 |------|---------|
 | `Dockerfile` | The custom image (upstream + the additions above) |
-| `docker-compose.yaml` | hermes + syncthing services, volume, healthchecks, env |
+| `docker-compose.yaml` | hermes + hermes-webui + syncthing services, volume, healthchecks, env |
 | `hub/` | Hermes hub content (SOP, changelog, notion link) |
 | `skills/` | Custom agent skills |
 
