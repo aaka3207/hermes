@@ -44,6 +44,12 @@ services:
       # volume (/opt/data). Explicit path avoids expanduser("~/.hermes")
       # landing in ephemeral /root/.hermes if invoked in a root context.
       - MNEMOSYNE_DATA_DIR=/opt/data/mnemosyne/data
+      # Obsidian vault + wiki paths for the agent (synced into /opt/data/Sync via
+      # syncthing). Values are set in Coolify; referenced here so they reach the
+      # hermes *runtime* container — Coolify otherwise only passes them as unused
+      # build args. Default to the on-volume Sync paths if unset in Coolify.
+      - OBSIDIAN_VAULT_PATH=${OBSIDIAN_VAULT_PATH:-/opt/data/Sync/obsidian}
+      - WIKI_PATH=${WIKI_PATH:-/opt/data/Sync/obsidian/wiki}
     healthcheck:
       # /health is served by the API server on 8642 (API_SERVER_ENABLED=true).
       # Returns {"status": "ok", "platform": "hermes-agent"}.
