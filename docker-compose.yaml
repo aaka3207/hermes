@@ -20,6 +20,10 @@ services:
       - API_SERVER_ENABLED=true
       - MEM0_API_KEY=${MEM0_API_KEY}
       - API_SERVER_HOST=0.0.0.0
+      # Shared secret the WebUI presents on /v1/chat/completions calls to the
+      # gateway API server. Set API_SERVER_KEY in .env; the hermes-webui service
+      # passes the same value as HERMES_WEBUI_GATEWAY_API_KEY.
+      - API_SERVER_KEY=${API_SERVER_KEY}
       - SEARXNG_URL=${SEARXNG_URL}
       - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY}
       - DISCORD_TOKEN=${DISCORD_TOKEN}
@@ -53,6 +57,62 @@ services:
         limits:
           memory: 4G
           cpus: "2.0"
+
+  # hermes-webui — browser/phone frontend for the agent.
+  #
+  # Runs the stock upstream image as a THIN frontend. Browser chat turns are
+  # bridged over HTTP to the patched `hermes` gateway (HERMES_WEBUI_CHAT_BACKEND
+  # =gateway → http://hermes:8642/v1/chat/completions), so all LLM + memory work
+  # executes in the hermes container — where the Codex null-guard, the Mnemosyne
+  # lazy-register patch, and the Mnemosyne/hindsight providers actually live.
+  #
+  # This is deliberately NOT the upstream "in-process" default: that path builds
+  # its own venv from plain hermes-agent[all] and would carry neither our SDK
+  # patches (every Codex call crashes on null response.output) nor the Mnemosyne
+  # provider. Bridging to the gateway sidesteps both.
+  #
+  # State (sessions, settings) lands in ~/.hermes/webui on the shared volume.
+  hermes-webui:
+    image: ghcr.io/nesquena/hermes-webui:latest
+    container_name: hermes-webui
+    restart: unless-stopped
+    depends_on:
+      hermes:
+        condition: service_healthy
+    ports:
+      - "8787:8787"   # WebUI (front with a Coolify domain, e.g. hermes-webui.aakashe.org)
+    volumes:
+      # Same host ~/.hermes as the gateway. The upstream image expects the hermes
+      # home at /home/hermeswebui/.hermes (not /opt/data); HERMES_HOME below points
+      # the WebUI at this mount. docker_init auto-detects the volume's UID/GID
+      # (10000) and remaps the runtime user to match.
+      - ~/.hermes:/home/hermeswebui/.hermes
+    environment:
+      - HERMES_WEBUI_HOST=0.0.0.0
+      - HERMES_WEBUI_PORT=8787
+      - HERMES_HOME=/home/hermeswebui/.hermes
+      - HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui
+      # Align the runtime user with the shared volume owner (hermes runs as 10000).
+      - WANTED_UID=10000
+      - WANTED_GID=10000
+      # Route browser chat turns to the patched gateway instead of running the
+      # agent in-process. `hermes` resolves on the compose default network.
+      - HERMES_WEBUI_CHAT_BACKEND=gateway
+      - HERMES_WEBUI_GATEWAY_BASE_URL=http://hermes:8642
+      - HERMES_WEBUI_GATEWAY_API_KEY=${API_SERVER_KEY}
+      # REQUIRED for an internet-exposed UI: gate the dashboard behind a password.
+      - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8787/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
 
   syncthing:
     image: lscr.io/linuxserver/syncthing:latest
