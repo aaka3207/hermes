@@ -51,7 +51,15 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 60s   # gateway boot + skill load + API server bind
+      # The gateway is slow to boot: container start → s6 init → "Gateway
+      # Starting" banner takes ~110s, and the API server binds 8642 later still
+      # (measured ~150-200s+ under load). `docker compose up` waits out the
+      # start_period before counting failures, so it must exceed real boot time
+      # or the deploy aborts the gateway as unhealthy while it's still starting —
+      # which then leaves dependents (hermes-webui) stuck in "Created". The
+      # concurrent mnemosyne-dashboard startup (apt+git clone) adds contention,
+      # so allow generous margin.
+      start_period: 300s
     deploy:
       resources:
         limits:
@@ -107,7 +115,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      # First boot creates a venv and uv-pip-installs deps before binding 8787,
+      # which can exceed 30s on a cold image. Margin avoids a false-unhealthy.
+      start_period: 120s
     deploy:
       resources:
         limits:
@@ -151,6 +161,15 @@ services:
     image: python:3.12-slim
     container_name: hermes-mnemosyne-dashboard
     restart: unless-stopped
+    # Start only after the gateway is healthy. The dashboard's boot-time
+    # apt-get + git clone is CPU/IO/network-heavy; running it concurrently with
+    # the gateway's (already slow) boot was enough contention to push the gateway
+    # past its healthcheck window and abort the deploy. Gating it here removes
+    # that contention — the dashboard only reads the memory DB the gateway owns,
+    # so there's no reason for it to come up first.
+    depends_on:
+      hermes:
+        condition: service_healthy
     command:
       - bash
       - -c
