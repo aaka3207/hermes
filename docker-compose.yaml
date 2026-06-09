@@ -17,6 +17,14 @@ services:
       - ~/.hermes:/opt/data
     environment:
       - HERMES_DASHBOARD=1
+      # Basic-auth gate for the hermes dashboard (port 9119). Set in Coolify;
+      # referenced here so they reach the runtime container. The SECRET signs
+      # session cookies — set a stable value so sessions survive restarts;
+      # without it a random key is generated per boot and you're logged out on
+      # every restart.
+      - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME}
+      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD}
+      - HERMES_DASHBOARD_BASIC_AUTH_SECRET=${HERMES_DASHBOARD_BASIC_AUTH_SECRET}
       - API_SERVER_ENABLED=true
       - MEM0_API_KEY=${MEM0_API_KEY}
       - API_SERVER_HOST=0.0.0.0
