@@ -14,7 +14,7 @@ RUN apt-get update && \
 # python-version-specific site-packages path and dangles if the base image
 # bumps Python. Memory DB lives on the volume via MNEMOSYNE_DATA_DIR (compose).
 # Activate by setting `memory.provider: mnemosyne` in config.yaml.
-RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-memory[embeddings]==3.1.2" sqlite-vec==0.1.9 && \
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-memory[embeddings]==3.5.0" sqlite-vec==0.1.9 && \
     ln -s "$(/opt/hermes/.venv/bin/python -c 'import importlib.util as u; print(u.find_spec("hermes_memory_provider").submodule_search_locations[0])')" \
         /opt/hermes/plugins/memory/mnemosyne && \
     /opt/hermes/.venv/bin/python -c "import importlib.util as u; assert u.find_spec('mnemosyne'), 'mnemosyne import failed'; print('mnemosyne provider linked OK')"
@@ -58,7 +58,9 @@ PY
 # (register_hermes_host_llm is idempotent). Result: consolidation + fact
 # extraction use Codex via Hermes' auxiliary client instead of AAAK/regex.
 # Idempotent + non-fatal; remove if/when Mnemosyne fixes gateway registration.
-# Verified against mnemosyne-memory==3.1.2: both anchors match (count=1 each).
+# Verified against mnemosyne-memory==3.5.0: bug still unfixed upstream
+# (core/llm_backends.py byte-identical 3.1.2->3.5.0); both anchors match
+# (count=1 each, local_llm.py L293-294 + L325-327).
 RUN /opt/hermes/.venv/bin/python - <<'PY'
 import mnemosyne.core.local_llm as m
 f = m.__file__
@@ -94,3 +96,46 @@ else:
     else:
         print("WARNING: mnemosyne anchors not found (%d/%d); skipping." % (s.count(old1), s.count(old2)))
 PY
+
+# Persist the mnemosyne embedding-model cache for root-context CLI runs.
+# mnemosyne hardcodes the fastembed cache to ~/.hermes/cache/fastembed
+# (embeddings.py; no env override — MNEMOSYNE_DATA_DIR only moves the DB).
+# The gateway and the PATH shim (/opt/hermes/bin/hermes) run with
+# HOME=/opt/data, so their cache lands on the volume; but invoking the venv
+# binary directly as root (`docker exec … /opt/hermes/.venv/bin/hermes`, as
+# older upstream docs suggest) gets HOME=/root and re-downloads the ~65MB
+# model into the ephemeral layer after every redeploy. Symlink root's cache
+# dir onto the volume so every context shares the persistent copy (dangles
+# at build time; resolves once the volume is mounted — mnemosyne's makedirs
+# follows it). The rm also drops the stray ~/.hermes/mnemosyne DB the patch
+# step above bakes into the image (importing mnemosyne as root initializes
+# a DB at build time).
+RUN rm -rf /root/.hermes && mkdir -p /root/.hermes && \
+    ln -s /opt/data/.hermes/cache /root/.hermes/cache
+
+# Make the CLI reachable + safe from every in-container shell context:
+#
+# 1) Login shells (`bash -l`, some web terminals): /etc/profile resets PATH
+#    to the Debian default, dropping /opt/hermes/bin (the exec shim) and the
+#    venv — "command not found" is what pushes operators to type the venv
+#    path and bypass the shim. Restore the image PATH via profile.d.
+#
+# 2) The `mnemosyne` entrypoint: upstream only shims `hermes`. Running
+#    `mnemosyne ...` as root gets HOME=/root (ephemeral cache, root-owned
+#    files). Mirror the upstream shim: drop to the hermes user with
+#    HOME=/opt/data; pass through unchanged when already non-root.
+RUN printf '%s\n' \
+        '# hermes-agent: restore image PATH in login shells (profile resets it)' \
+        'export PATH="/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/data/.local/bin:$PATH"' \
+        > /etc/profile.d/99-hermes-path.sh && \
+    printf '%s\n' \
+        '#!/bin/sh' \
+        '# docker-exec privilege-drop shim for the mnemosyne CLI; mirrors' \
+        '# /opt/hermes/bin/hermes (see hermes-exec-shim.sh for rationale).' \
+        'REAL=/opt/hermes/.venv/bin/mnemosyne' \
+        '[ -x "$REAL" ] || { echo "mnemosyne-shim: $REAL missing" >&2; exit 127; }' \
+        'if [ "$(id -u)" != "0" ]; then exec "$REAL" "$@"; fi' \
+        'export HOME=/opt/data' \
+        'exec /command/s6-setuidgid hermes "$REAL" "$@"' \
+        > /opt/hermes/bin/mnemosyne && \
+    chmod +x /opt/hermes/bin/mnemosyne
