@@ -19,6 +19,20 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-m
         /opt/hermes/plugins/memory/mnemosyne && \
     /opt/hermes/.venv/bin/python -c "import importlib.util as u; assert u.find_spec('mnemosyne'), 'mnemosyne import failed'; print('mnemosyne provider linked OK')"
 
+# Cognee — graph-based memory provider (cloud/remote mode). Installed from the
+# upstream integrations monorepo subdirectory (not published to PyPI). Registers
+# a `hermes_agent.plugins` entry point named `cognee` (module
+# cognee_integration_hermes), so a venv install is picked up as an available
+# provider — no volume plugin symlink needed. Activate via `memory.provider:
+# cognee` in config.yaml; cloud mode is driven by COGNEE_BASE_URL/COGNEE_API_KEY
+# (set in Coolify, passed through compose). Heavy dep tree (cognee>=1.0.0 pulls
+# litellm/lancedb/pyarrow/etc.); resolves cleanly against the base image with no
+# openai/pydantic-core changes (verified), so the Codex null-guard below is
+# unaffected.
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
+        "cognee-integration-hermes-agent @ git+https://github.com/topoteretes/cognee-integrations.git#subdirectory=integrations/hermes-agent" && \
+    /opt/hermes/.venv/bin/python -c "import importlib.util as u; assert u.find_spec('cognee_integration_hermes'), 'cognee integration import failed'; print('cognee provider installed OK')"
+
 # Patch the openai SDK's streaming Responses parser to tolerate a null
 # `response.output`. The ChatGPT Codex backend (chatgpt.com/backend-api/codex,
 # used by provider openai-codex) streams events with output=None, which
