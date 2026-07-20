@@ -35,6 +35,10 @@ services:
       - SEARXNG_URL=${SEARXNG_URL}
       - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY}
       - METAMCP_API_KEY=${METAMCP_API_KEY}
+      # Cognee memory provider (cloud/remote mode). Set in Coolify.
+      - COGNEE_BASE_URL=${COGNEE_BASE_URL}
+      - COGNEE_API_KEY=${COGNEE_API_KEY}
+      - COGNEE_DATASET=${COGNEE_DATASET:-hermes}
       - DISCORD_BOT_TOKEN=${DISCORD_TOKEN}
       - HONCHO_API_KEY=${HONCHO_API_KEY}
       - GATEWAY_SECRET=${GATEWAY_SECRET}
