@@ -35,6 +35,8 @@ services:
       - SEARXNG_URL=${SEARXNG_URL}
       - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY}
       - METAMCP_API_KEY=${METAMCP_API_KEY}
+      # Camofox anti-detection browser companion (its own Coolify app). Set in Coolify.
+      - CAMOFOX_URL=${CAMOFOX_URL}
       # Cognee memory provider (cloud/remote mode). Set in Coolify.
       - COGNEE_BASE_URL=${COGNEE_BASE_URL}
       - COGNEE_API_KEY=${COGNEE_API_KEY}
