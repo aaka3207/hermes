@@ -81,6 +81,14 @@ services:
       - MNEMOSYNE_EMBEDDING_API_KEY=${OPENROUTER_API_KEY}
       - MNEMOSYNE_EMBEDDING_MODEL=openai/text-embedding-3-small
       - MNEMOSYNE_EMBEDDING_DIM=1536
+      # MNEMOSYNE_EXTRACTION_PROMPT is set in Coolify (reaches the container via
+      # env_file: .env) — it steers fact extraction toward durable, portable,
+      # user-centric memories and drops ephemeral session/technical/debug detail
+      # (so the shared store is meaningful in Claude Desktop too). It ONLY takes
+      # effect because the lazy-register patch (Dockerfile) keeps the Codex host
+      # LLM attached to the extraction path; without a live LLM, extract_facts()
+      # returns [] and the prompt is never consulted. Tunable in the Coolify UI +
+      # restart (no rebuild needed).
       # Obsidian vault + wiki paths for the agent (synced into /opt/data/Sync via
       # syncthing). Values are set in Coolify; referenced here so they reach the
       # hermes *runtime* container — Coolify otherwise only passes them as unused
