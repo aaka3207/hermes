@@ -66,13 +66,19 @@ services:
       # /embeddings endpoint instead of local fastembed ONNX inference — keeps
       # embedding generation off this container's CPU/RAM budget (the
       # [embeddings] extra/fastembed is deliberately not installed above).
-      # OPENROUTER_API_KEY is already set above for other use; mnemosyne's
-      # MNEMOSYNE_EMBEDDING_API_KEY defaults to it. MNEMOSYNE_EMBEDDING_DIM
-      # must match whatever MNEMOSYNE_EMBEDDING_MODEL is chosen (1536 for
-      # openai/text-embedding-3-small) and must match the standalone
-      # mnemosyne-mcp service's setting, since they share one vector table.
+      # IMPORTANT: mnemosyne 3.5.0's embedding code (mnemosyne/core/embeddings.py)
+      # reads its OWN vars — MNEMOSYNE_EMBEDDING_API_KEY (falling back only to
+      # OPENAI_API_KEY, NOT OPENROUTER_API_KEY) and MNEMOSYNE_EMBEDDING_API_URL
+      # (NOT OPENROUTER_BASE_URL). Without MNEMOSYNE_EMBEDDING_API_KEY set,
+      # available() returns False and it silently drops to FTS5 keyword-only
+      # (verified: embeddings_available: NO in `hermes mnemosyne doctor`). We
+      # reuse the existing OPENROUTER_API_KEY value via ${...} interpolation.
+      # MNEMOSYNE_EMBEDDING_DIM must match the model (1536 for
+      # openai/text-embedding-3-small) and the standalone mnemosyne-mcp
+      # service's setting, since they share one vector table.
       - MNEMOSYNE_EMBEDDINGS_VIA_API=true
-      - OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+      - MNEMOSYNE_EMBEDDING_API_URL=https://openrouter.ai/api/v1
+      - MNEMOSYNE_EMBEDDING_API_KEY=${OPENROUTER_API_KEY}
       - MNEMOSYNE_EMBEDDING_MODEL=openai/text-embedding-3-small
       - MNEMOSYNE_EMBEDDING_DIM=1536
       # Obsidian vault + wiki paths for the agent (synced into /opt/data/Sync via
