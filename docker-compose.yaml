@@ -55,10 +55,26 @@ services:
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
       - SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
-#       # Mnemosyne memory provider: pin its SQLite store to the persistent
-#       # volume (/opt/data). Explicit path avoids expanduser("~/.hermes")
-#       # landing in ephemeral /root/.hermes if invoked in a root context.
-#       - MNEMOSYNE_DATA_DIR=/opt/data/mnemosyne/data
+      # Mnemosyne memory provider: pin its SQLite store to the persistent
+      # volume (/opt/data). Explicit path avoids expanduser("~/.hermes")
+      # landing in ephemeral /root/.hermes if invoked in a root context. This
+      # resolves to ~/.hermes/mnemosyne/data on the host — the SAME path the
+      # standalone mnemosyne-mcp Coolify service (separate repo) must bind-mount
+      # as its MNEMOSYNE_HOST_DATA_DIR, so both share one SQLite file.
+      - MNEMOSYNE_DATA_DIR=/opt/data/mnemosyne/data
+      # Route mnemosyne's embeddings through OpenRouter's OpenAI-compatible
+      # /embeddings endpoint instead of local fastembed ONNX inference — keeps
+      # embedding generation off this container's CPU/RAM budget (the
+      # [embeddings] extra/fastembed is deliberately not installed above).
+      # OPENROUTER_API_KEY is already set above for other use; mnemosyne's
+      # MNEMOSYNE_EMBEDDING_API_KEY defaults to it. MNEMOSYNE_EMBEDDING_DIM
+      # must match whatever MNEMOSYNE_EMBEDDING_MODEL is chosen (1536 for
+      # openai/text-embedding-3-small) and must match the standalone
+      # mnemosyne-mcp service's setting, since they share one vector table.
+      - MNEMOSYNE_EMBEDDINGS_VIA_API=true
+      - OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+      - MNEMOSYNE_EMBEDDING_MODEL=openai/text-embedding-3-small
+      - MNEMOSYNE_EMBEDDING_DIM=1536
       # Obsidian vault + wiki paths for the agent (synced into /opt/data/Sync via
       # syncthing). Values are set in Coolify; referenced here so they reach the
       # hermes *runtime* container — Coolify otherwise only passes them as unused

@@ -7,18 +7,56 @@ RUN apt-get update && \
     npm install -g @anthropic-ai/claude-code byterover-cli ntn && npm cache clean --force && \
     uv pip install --python /opt/hermes/.venv/bin/python --no-cache hindsight-client==0.6.1 faster-whisper==1.2.1
 
-# --- mnemosyne memory provider DISABLED (switched to cognee) — commented out, reversible ---
-# # Mnemosyne — local-first SQLite memory provider (alternative to hindsight).
-# # Installed as a *bundled* provider: pip-install the engine, then symlink the
-# # provider package into the image's bundled memory-plugins dir. This avoids the
-# # upstream installer's $HERMES_HOME/plugins volume symlink, which points at a
-# # python-version-specific site-packages path and dangles if the base image
-# # bumps Python. Memory DB lives on the volume via MNEMOSYNE_DATA_DIR (compose).
-# # Activate by setting `memory.provider: mnemosyne` in config.yaml.
-# RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-memory[embeddings]==3.5.0" sqlite-vec==0.1.9 && \
-#     ln -s "$(/opt/hermes/.venv/bin/python -c 'import importlib.util as u; print(u.find_spec("hermes_memory_provider").submodule_search_locations[0])')" \
-#         /opt/hermes/plugins/memory/mnemosyne && \
-#     /opt/hermes/.venv/bin/python -c "import importlib.util as u; assert u.find_spec('mnemosyne'), 'mnemosyne import failed'; print('mnemosyne provider linked OK')"
+# Mnemosyne — local-first SQLite memory provider (alternative to hindsight).
+# Installed as a *bundled* provider: pip-install the engine, then symlink the
+# provider package into the image's bundled memory-plugins dir. This avoids the
+# upstream installer's $HERMES_HOME/plugins volume symlink, which points at a
+# python-version-specific site-packages path and dangles if the base image
+# bumps Python. Memory DB lives on the volume via MNEMOSYNE_DATA_DIR (compose),
+# at the SAME host path the standalone mnemosyne-mcp Coolify service (separate
+# repo) points its own MNEMOSYNE_DATA_DIR at — the two processes share one
+# SQLite file so hermes (in-process, auto-injected memory) and MCP clients like
+# Claude Desktop (tool-call driven, via mnemosyne-mcp) see the same memories.
+# Embeddings are routed through OpenRouter's /embeddings API (compose env vars
+# MNEMOSYNE_EMBEDDINGS_VIA_API / OPENROUTER_BASE_URL / OPENROUTER_API_KEY /
+# MNEMOSYNE_EMBEDDING_MODEL / MNEMOSYNE_EMBEDDING_DIM) instead of local
+# fastembed ONNX inference — the [embeddings] extra (which bundles fastembed)
+# is deliberately omitted, keeping embedding generation off this container's
+# CPU/RAM budget entirely; sqlite-vec still does the local similarity search
+# over the resulting vectors. Activate by setting `memory.provider: mnemosyne`
+# in config.yaml.
+#
+# mnemosyne-memory ships NO plugin.yaml anywhere in the package (verified by
+# installing it and inspecting site-packages) — hermes-agent's directory-based
+# plugin discovery explicitly skips any plugins/memory/<name>/ dir lacking one
+# ("no plugin.yaml, depth cap reached"), so without this the provider silently
+# never registers (symptom: `hermes doctor` / `hermes memory doctor` reports
+# "mnemosyne plugin not found" despite __init__.py + register() being present
+# and importable). Same class of gap already solved for cognee above via its
+# hand-authored shim dir; mnemosyne instead symlinks straight into the
+# discovery dir, so the manifest is written into the real site-packages
+# directory the symlink resolves to.
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-memory==3.5.0" sqlite-vec==0.1.9 && \
+    PKGDIR="$(/opt/hermes/.venv/bin/python -c 'import importlib.util as u; print(u.find_spec("hermes_memory_provider").submodule_search_locations[0])')" && \
+    printf '%s\n' \
+        'name: mnemosyne' \
+        'version: 3.5.0' \
+        'description: "Mnemosyne — local-first SQLite memory provider with vector + FTS5 hybrid search."' \
+        'pip_dependencies: []' \
+        'requires_env: []' \
+        'hooks:' \
+        '  - system_prompt_block' \
+        '  - prefetch' \
+        '  - queue_prefetch' \
+        '  - sync_turn' \
+        '  - on_session_end' \
+        '  - on_memory_write' \
+        '  - shutdown' \
+        > "$PKGDIR/plugin.yaml" && \
+    ln -s "$PKGDIR" /opt/hermes/plugins/memory/mnemosyne && \
+    /opt/hermes/.venv/bin/python -c "import importlib.util as u; assert u.find_spec('mnemosyne'), 'mnemosyne import failed'; print('mnemosyne provider linked OK')" && \
+    test -f /opt/hermes/plugins/memory/mnemosyne/plugin.yaml && \
+    echo "mnemosyne plugin.yaml present OK"
 
 # Cognee — graph-based memory provider (cloud/remote mode). Installed from the
 # upstream integrations monorepo subdirectory (not published to PyPI). The pip
