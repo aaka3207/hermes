@@ -89,6 +89,12 @@ services:
       # LLM attached to the extraction path; without a live LLM, extract_facts()
       # returns [] and the prompt is never consulted. Tunable in the Coolify UI +
       # restart (no rebuild needed).
+      # Only extract memory from the USER's turns, not the assistant's. Without
+      # this, extraction mined assistant replies + hermes's own system-prompt
+      # rules (Composio/Gmail tool procedures, "never run REMOTE_BASH", email
+      # prompt-injection defenses) into junk, non-portable facts/instructions.
+      # Restricting to user turns keeps the store user-centric and portable.
+      - MNEMOSYNE_SYNC_ROLES=user
       # Obsidian vault + wiki paths for the agent (synced into /opt/data/Sync via
       # syncthing). Values are set in Coolify; referenced here so they reach the
       # hermes *runtime* container — Coolify otherwise only passes them as unused
