@@ -197,66 +197,74 @@ services:
       timeout: 20s
       retries: 10
 
-  # --- mnemosyne-dashboard service DISABLED (switched to cognee) — commented out ---
-#   # Read-only web dashboard for the mnemosyne SQLite memory store.
-#   # Source:  https://github.com/wysie/mnemosyne-dashboard
-#   # Audit:   stdlib-only Python, parameterized SQL, opens DB with `?mode=ro`.
-#   #          Single-maintainer 4-week-old repo — hence the explicit commit pin.
-#   # Auth:    Pre-provision plugin-data/mnemosyne-dashboard/config.json on the
-#   #          host before first boot (PBKDF2-200k password hash + auth_secret).
-#   #          Without that file the dashboard runs unauth — which would be a
-#   #          critical exposure given memory contents include conversation
-#   #          transcripts and PII.
-#   # Domain:  Add via Coolify UI → Domains for this service. Suggested:
-#   #          https://mnemosyne.aakashe.org:8765
-#   mnemosyne-dashboard:
-#     image: python:3.12-slim
-#     container_name: hermes-mnemosyne-dashboard
-#     restart: unless-stopped
-#     # Start only after the gateway is healthy. The dashboard's boot-time
-#     # apt-get + git clone is CPU/IO/network-heavy; running it concurrently with
-#     # the gateway's (already slow) boot was enough contention to push the gateway
-#     # past its healthcheck window and abort the deploy. Gating it here removes
-#     # that contention — the dashboard only reads the memory DB the gateway owns,
-#     # so there's no reason for it to come up first.
-#     depends_on:
-#       hermes:
-#         condition: service_healthy
-#     command:
-#       - bash
-#       - -c
-#       - |
-#         set -e
-#         apt-get update -qq && apt-get install -y --no-install-recommends -qq git ca-certificates >/dev/null
-#         cd /tmp && rm -rf dash
-#         git clone --quiet https://github.com/wysie/mnemosyne-dashboard.git dash
-#         cd dash && git checkout --quiet 42ba6b710e339d4c670e79874b7138f1c0f4be2e
-#         exec python server.py --host 0.0.0.0 --port 8765 --db /data/mnemosyne/mnemosyne.db
-#     volumes:
-#       # DB read-only at the kernel layer
-#       - ~/.hermes/mnemosyne/data:/data/mnemosyne:ro
-#       # Plugin-data dir holds config.json (auth_secret, password hash). Persists
-#       # across redeploys; pre-provisioned on the host with `auth_enabled: true`.
-#       - ~/.hermes/plugin-data:/root/.hermes/plugin-data
-#     environment:
-#       - HERMES_HOME=/root/.hermes
-#       - MNEMOSYNE_DASHBOARD_DB=/data/mnemosyne/mnemosyne.db
-#       - MNEMOSYNE_DASHBOARD_HOST=0.0.0.0
-#       - MNEMOSYNE_DASHBOARD_PORT=8765
-#       - MNEMOSYNE_DASHBOARD_AUTH_ENABLED=true
-#     healthcheck:
-#       test:
-#         - CMD-SHELL
-#         - 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8765/api/auth/status\", timeout=2)" || exit 1'
-#       interval: 30s
-#       timeout: 5s
-#       retries: 3
-#       start_period: 30s
-#     deploy:
-#       resources:
-#         limits:
-#           memory: 256M
-#           cpus: "0.5"
+  # Read-only web dashboard for the mnemosyne SQLite memory store.
+  # Source:  https://github.com/wysie/mnemosyne-dashboard (pinned commit).
+  # Audit:   stdlib-only Python, parameterized SQL, opens DB with ?mode=ro
+  #          (query-only enforced at the SQLite layer). Single-maintainer repo,
+  #          hence the explicit commit pin.
+  # Schema:  verified against mnemosyne 3.5.0 — episodic_memory, working_memory,
+  #          triples, consolidation_log, and all memoria_* tables present;
+  #          memoria_stats is absent but the code guards missing tables.
+  # Auth:    config.json (PBKDF2-200k hash + auth_secret, auth_enabled:true) is
+  #          pre-provisioned on the volume at
+  #          plugin-data/mnemosyne-dashboard/config.json (owned 10000). Without
+  #          it the dashboard runs UNAUTH — a critical exposure (memory holds
+  #          transcripts/PII), so it MUST exist before a domain is attached.
+  # DB mount: READ-WRITE on purpose (not :ro). The store is WAL mode, and SQLite
+  #          cannot open a WAL db on a read-only dir — it must touch -shm. The
+  #          ?mode=ro connection string still enforces query-only. Runs as root
+  #          so it writes the EXISTING 10000-owned -shm/-wal via root-bypass
+  #          without recreating (rechowning) them; hermes starts first
+  #          (depends_on) and owns them, so ownership stays consistent.
+  # Domain:  Add via Coolify → Domains for this service (container port 8765).
+  mnemosyne-dashboard:
+    image: python:3.12-slim
+    container_name: hermes-mnemosyne-dashboard
+    restart: unless-stopped
+    # Start only after the gateway is healthy. The dashboard's boot-time
+    # apt-get + git clone is CPU/IO/network-heavy; running it concurrently with
+    # the gateway's (already slow) boot was enough contention to push the gateway
+    # past its healthcheck window and abort the deploy. Gating it here removes
+    # that contention, and ensures hermes owns/opens the WAL DB first.
+    depends_on:
+      hermes:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        apt-get update -qq && apt-get install -y --no-install-recommends -qq git ca-certificates >/dev/null
+        cd /tmp && rm -rf dash
+        git clone --quiet https://github.com/wysie/mnemosyne-dashboard.git dash
+        cd dash && git checkout --quiet 42ba6b710e339d4c670e79874b7138f1c0f4be2e
+        exec python server.py --host 0.0.0.0 --port 8765 --db /data/mnemosyne/mnemosyne.db
+    volumes:
+      # RW (not :ro) — WAL mode needs -shm access; ?mode=ro keeps it query-only.
+      - ~/.hermes/mnemosyne/data:/data/mnemosyne
+      # Plugin-data dir holds config.json (auth_secret, password hash). Persists
+      # across redeploys; pre-provisioned on the host with auth_enabled: true.
+      - ~/.hermes/plugin-data:/root/.hermes/plugin-data
+    environment:
+      - HERMES_HOME=/root/.hermes
+      - MNEMOSYNE_DASHBOARD_DB=/data/mnemosyne/mnemosyne.db
+      - MNEMOSYNE_DASHBOARD_HOST=0.0.0.0
+      - MNEMOSYNE_DASHBOARD_PORT=8765
+      - MNEMOSYNE_DASHBOARD_AUTH_ENABLED=true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8765/api/auth/status\", timeout=2)" || exit 1'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # apt + git clone before the server binds; allow generous margin.
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
 
 volumes:
   syncthing_config:
