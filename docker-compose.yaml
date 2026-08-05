@@ -95,6 +95,15 @@ services:
       # prompt-injection defenses) into junk, non-portable facts/instructions.
       # Restricting to user turns keeps the store user-centric and portable.
       - MNEMOSYNE_SYNC_ROLES=user
+      # Author attribution for the shared store. The DB is shared with the
+      # standalone mnemosyne-mcp service (Claude Desktop, author_id=claude-desktop);
+      # stamping every write from this side with author_id=hermes lets recall scope
+      # by author and makes the soul.md "audit only records you authored" rule
+      # enforceable. working_memory/episodic_memory have indexed author_id/author_type
+      # columns; remember() stamps them from these env vars. Previously unset (all
+      # author_id NULL), so writes from both agents were indistinguishable.
+      - MNEMOSYNE_AUTHOR_ID=hermes
+      - MNEMOSYNE_AUTHOR_TYPE=agent
       # Obsidian vault + wiki paths for the agent (synced into /opt/data/Sync via
       # syncthing). Values are set in Coolify; referenced here so they reach the
       # hermes *runtime* container — Coolify otherwise only passes them as unused

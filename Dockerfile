@@ -175,6 +175,35 @@ else:
         print("WARNING: mnemosyne anchors not found (%d/%d); skipping." % (s.count(old1), s.count(old2)))
 PY
 
+# Disable Mnemosyne's UNCONDITIONAL regex fact extractor
+# (BeamMemory.extract_and_store_facts, beam.py). mnemosyne runs TWO extractors on
+# every write/consolidation: the LLM one (_extract_and_store_facts -> extraction.py,
+# governed by MNEMOSYNE_EXTRACTION_PROMPT) which we keep, AND a hardcoded
+# multilingual regex extractor that scrapes "first/then" sequences, named dates, and
+# imperative sentences ("never call X", "must first Y") into memoria_facts/instructions.
+# The regex layer has NO config gate in 3.5.0 (ignore_patterns/sync_roles/the prompt
+# don't reach it — confirmed against source + docs); even upstream main only hides its
+# output at recall, still writing the junk. Neutralize it by overriding the method with
+# a no-op (returns the empty per-type counts dict its callers expect). The LLM
+# extractor + preferences are unaffected. Idempotent; drop this once on a version that
+# gates the extractor at write time.
+RUN /opt/hermes/.venv/bin/python - <<'PY'
+import mnemosyne.core.beam as m
+f = m.__file__
+s = open(f).read()
+marker = "# hermes-patch: disable regex fact extractor"
+if marker in s:
+    print("regex-extractor patch already present:", f)
+else:
+    s += ("\n\n" + marker + "\n"
+          "try:\n"
+          "    BeamMemory.extract_and_store_facts = lambda self, *a, **k: {}\n"
+          "except Exception as _e:\n"
+          "    print('WARNING: could not disable regex extractor:', _e)\n")
+    open(f, "w").write(s)
+    print("patched: regex fact extractor disabled:", f)
+PY
+
 # # Persist the mnemosyne embedding-model cache for root-context CLI runs.
 # # mnemosyne hardcodes the fastembed cache to ~/.hermes/cache/fastembed
 # # (embeddings.py; no env override — MNEMOSYNE_DATA_DIR only moves the DB).
