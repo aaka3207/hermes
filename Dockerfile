@@ -204,6 +204,59 @@ else:
     print("patched: regex fact extractor disabled:", f)
 PY
 
+# Wire author attribution (MNEMOSYNE_AUTHOR_ID/_TYPE) into the LIVE hermes
+# plugin package `hermes_memory_provider` (installed alongside mnemosyne-memory
+# as its host adapter — NOT the similarly-named `mnemosyne_hermes` tool-schema
+# package bundled under site-packages/integrations/hermes/src, which is unused
+# here and only matters for the standalone mnemosyne-mcp server).
+#
+# Two independent changes, because mnemosyne's own design couples them:
+#   1. Stamp writes: BeamMemory() is constructed with author_id=None, so every
+#      remember()/remember_batch()/consolidate() call (all read self.author_id
+#      internally) stores author_id=NULL. Pass the env vars at construction so
+#      the shared DB can distinguish hermes's writes from Claude Desktop's
+#      (mnemosyne-mcp, author_id=claude-desktop) for self-audit.
+#   2. Keep automatic recall shared: _prefetch_bank() reads
+#      `self._beam.author_id or os.environ.get("MNEMOSYNE_AUTHOR_ID")` and, if
+#      truthy, passes author_id into beam.recall() — which per beam.py's own
+#      comment triggers a `(1=1)` clause that filters to that author AND skips
+#      session/channel scoping. Once change #1 makes self._beam.author_id
+#      non-None, every automatic per-turn recall would silently narrow to only
+#      hermes-authored memories, INCLUDING the 88 existing rows all being
+#      author_id=NULL right now (i.e. the injected context would go empty) —
+#      the opposite of the shared-across-agents goal. Force it to None so
+#      automatic recall always stays shared; explicit self-audit can still
+#      pass author_id via a direct recall() tool call.
+# Verified against mnemosyne-memory==3.5.0 (hermes_memory_provider bundled by
+# it); re-check both anchors on upgrade.
+RUN /opt/hermes/.venv/bin/python - <<'PY'
+import importlib.util as u
+f = u.find_spec("hermes_memory_provider").origin
+s = open(f).read()
+marker = "# hermes-patch: author attribution"
+if marker in s:
+    print("author-attribution patch already present:", f)
+else:
+    old1 = ("                BeamMemory = _get_beam_class()\n"
+            "                self._beam = BeamMemory(session_id=self._session_id)\n"
+            "                logger.info(\"Mnemosyne initialized: session=%s\", self._session_id)\n")
+    new1 = ("                BeamMemory = _get_beam_class()\n"
+            "                " + marker + "\n"
+            "                self._beam = BeamMemory(\n"
+            "                    session_id=self._session_id,\n"
+            "                    author_id=os.environ.get(\"MNEMOSYNE_AUTHOR_ID\"),\n"
+            "                    author_type=os.environ.get(\"MNEMOSYNE_AUTHOR_TYPE\"),\n"
+            "                )\n"
+            "                logger.info(\"Mnemosyne initialized: session=%s, author=%s\", self._session_id, self._beam.author_id)\n")
+    old2 = ("            author_id = self._beam.author_id or os.environ.get(\"MNEMOSYNE_AUTHOR_ID\")\n")
+    new2 = ("            author_id = None  " + marker + " -- automatic recall must stay shared; see Dockerfile\n")
+    if s.count(old1) == 1 and s.count(old2) == 1:
+        open(f, "w").write(s.replace(old1, new1).replace(old2, new2))
+        print("patched: author attribution wired (write-stamp + shared-recall guard):", f)
+    else:
+        print("WARNING: author-attribution anchors not found (%d/%d); skipping." % (s.count(old1), s.count(old2)))
+PY
+
 # # Persist the mnemosyne embedding-model cache for root-context CLI runs.
 # # mnemosyne hardcodes the fastembed cache to ~/.hermes/cache/fastembed
 # # (embeddings.py; no env override — MNEMOSYNE_DATA_DIR only moves the DB).
