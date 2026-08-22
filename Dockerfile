@@ -265,6 +265,45 @@ else:
         print("WARNING: author-attribution anchors not found (%d/%d); skipping." % (s.count(old1), s.count(old2)))
 PY
 
+# Fix Photon sidecar ERR_MODULE_NOT_FOUND on managed images (read-only
+# /opt/hermes). sidecar_paths.py mirrors the sidecar source into the
+# writable data volume (/opt/data/photon/sidecar) when the install tree is
+# read-only, but its _MIRROR_FILES tuple is stale: upstream added
+# send-format.mjs and stream-staleness.mjs (now imported by index.mjs)
+# without adding them to the mirror list, so the mirrored copy silently
+# lacks them and the sidecar crashes at startup with
+# `Cannot find module '.../send-format.mjs'`. Append the two missing
+# filenames to the tuple. Idempotent (skips if already patched); re-verify
+# on upgrade whether index.mjs still imports exactly these two extra files
+# (grep index.mjs for other .mjs siblings if this stops applying).
+RUN /opt/hermes/.venv/bin/python - <<'PY'
+f = "/opt/hermes/plugins/platforms/photon/sidecar_paths.py"
+s = open(f).read()
+marker = "# hermes-patch: mirror missing sidecar files"
+if marker in s:
+    print("photon-mirror-files patch already present:", f)
+else:
+    old = ('_MIRROR_FILES = (\n'
+           '    "index.mjs",\n'
+           '    "package.json",\n'
+           '    "package-lock.json",\n'
+           '    "patch-spectrum-mixed-attachments.mjs",\n'
+           ')\n')
+    new = ('_MIRROR_FILES = (  ' + marker + '\n'
+           '    "index.mjs",\n'
+           '    "package.json",\n'
+           '    "package-lock.json",\n'
+           '    "patch-spectrum-mixed-attachments.mjs",\n'
+           '    "send-format.mjs",\n'
+           '    "stream-staleness.mjs",\n'
+           ')\n')
+    if s.count(old) == 1:
+        open(f, "w").write(s.replace(old, new))
+        print("patched: photon _MIRROR_FILES includes send-format.mjs + stream-staleness.mjs:", f)
+    else:
+        print("WARNING: photon _MIRROR_FILES anchor not found (%d matches); skipping." % s.count(old))
+PY
+
 # # Persist the mnemosyne embedding-model cache for root-context CLI runs.
 # # mnemosyne hardcodes the fastembed cache to ~/.hermes/cache/fastembed
 # # (embeddings.py; no env override — MNEMOSYNE_DATA_DIR only moves the DB).
