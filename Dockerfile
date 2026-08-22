@@ -36,11 +36,11 @@ RUN apt-get update && \
 # hand-authored shim dir; mnemosyne instead symlinks straight into the
 # discovery dir, so the manifest is written into the real site-packages
 # directory the symlink resolves to.
-RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-memory==3.5.0" sqlite-vec==0.1.9 && \
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-memory==3.15.1" sqlite-vec==0.1.9 && \
     PKGDIR="$(/opt/hermes/.venv/bin/python -c 'import importlib.util as u; print(u.find_spec("hermes_memory_provider").submodule_search_locations[0])')" && \
     printf '%s\n' \
         'name: mnemosyne' \
-        'version: 3.5.0' \
+        'version: 3.15.1' \
         'description: "Mnemosyne — local-first SQLite memory provider with vector + FTS5 hybrid search."' \
         'pip_dependencies: []' \
         'requires_env: []' \
@@ -136,9 +136,9 @@ PY
 # without a live LLM backend, extract_facts() returns [] and the custom prompt
 # is never consulted, so stored memories degrade to raw/AAAK junk.
 # Idempotent + non-fatal; remove if/when Mnemosyne fixes gateway registration.
-# Verified against mnemosyne-memory==3.5.0: bug still unfixed upstream
-# (core/llm_backends.py byte-identical 3.1.2->3.5.0); both anchors match
-# (count=1 each, local_llm.py L293-294 + L325-327).
+# Re-verified at mnemosyne-memory==3.15.1 (bumped 2026-08-22): still unfixed
+# upstream, both anchors still match (count=1 each) despite ~220 commits of
+# drift since 3.5.0. register_hermes_host_llm import confirmed still valid.
 RUN /opt/hermes/.venv/bin/python - <<'PY'
 import mnemosyne.core.local_llm as m
 f = m.__file__
@@ -181,12 +181,16 @@ PY
 # governed by MNEMOSYNE_EXTRACTION_PROMPT) which we keep, AND a hardcoded
 # multilingual regex extractor that scrapes "first/then" sequences, named dates, and
 # imperative sentences ("never call X", "must first Y") into memoria_facts/instructions.
-# The regex layer has NO config gate in 3.5.0 (ignore_patterns/sync_roles/the prompt
-# don't reach it — confirmed against source + docs); even upstream main only hides its
+# The regex layer has NO config gate (ignore_patterns/sync_roles/the prompt don't
+# reach it — confirmed against source + docs); even upstream main only hides its
 # output at recall, still writing the junk. Neutralize it by overriding the method with
 # a no-op (returns the empty per-type counts dict its callers expect). The LLM
 # extractor + preferences are unaffected. Idempotent; drop this once on a version that
 # gates the extractor at write time.
+# Re-verified at 3.15.1 (2026-08-22): the regex patterns got more refined (added
+# transient-keyword filtering etc.) but the method is still unconditional with no
+# gate — patch still applies cleanly and is still needed. Append-based, so it's
+# version-agnostic by design (doesn't depend on the method body matching anything).
 RUN /opt/hermes/.venv/bin/python - <<'PY'
 import mnemosyne.core.beam as m
 f = m.__file__
@@ -227,8 +231,12 @@ PY
 #      the opposite of the shared-across-agents goal. Force it to None so
 #      automatic recall always stays shared; explicit self-audit can still
 #      pass author_id via a direct recall() tool call.
-# Verified against mnemosyne-memory==3.5.0 (hermes_memory_provider bundled by
-# it); re-check both anchors on upgrade.
+# Re-verified at mnemosyne-memory==3.15.1 (2026-08-22, bundled hermes_memory_provider
+# copy — the actively-maintained sibling copy at integrations/hermes/ already has a
+# fixed shared_surface_path default, but this bundled copy still has the same bad
+# site-packages-relative default from 3.5.0; the config-level workaround in
+# docker-compose.yaml/config.yaml remains necessary regardless). Both anchors here
+# still match unchanged despite ~220 commits of drift since 3.5.0.
 RUN /opt/hermes/.venv/bin/python - <<'PY'
 import importlib.util as u
 f = u.find_spec("hermes_memory_provider").origin
