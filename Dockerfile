@@ -58,42 +58,6 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-m
     test -f /opt/hermes/plugins/memory/mnemosyne/plugin.yaml && \
     echo "mnemosyne plugin.yaml present OK"
 
-# Cognee — graph-based memory provider (cloud/remote mode). Installed from the
-# upstream integrations monorepo subdirectory (not published to PyPI). The pip
-# package exposes CogneeMemoryProvider (a MemoryProvider subclass) + a
-# register(ctx) hook via the `hermes_agent.plugins` entry point. BUT this pinned
-# base image predates entry-point discovery — it finds memory providers by
-# scanning /opt/hermes/plugins/memory/<name>/ for an __init__.py (+ optional
-# plugin.yaml), the same dir-based mechanism mnemosyne was symlinked into. So a
-# bare pip install leaves cognee in site-packages where discovery never looks
-# (it won't appear in `hermes memory` and memory.provider: cognee won't resolve).
-# We therefore also drop a small bundled shim dir that re-exports the installed
-# provider, making it discoverable. Activate via `memory.provider: cognee` in
-# config.yaml; cloud mode is driven by COGNEE_BASE_URL/COGNEE_API_KEY (Coolify,
-# passed through compose). Heavy dep tree (cognee>=1.0.0 pulls
-# litellm/lancedb/pyarrow/etc.); resolves cleanly with no openai/pydantic-core
-# changes (verified), so the Codex null-guard below is unaffected.
-RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
-        "cognee-integration-hermes-agent @ git+https://github.com/topoteretes/cognee-integrations.git#subdirectory=integrations/hermes-agent" && \
-    /opt/hermes/.venv/bin/python -c "import importlib.util as u; assert u.find_spec('cognee_integration_hermes'), 'cognee integration import failed'; print('cognee provider installed OK')" && \
-    mkdir -p /opt/hermes/plugins/memory/cognee && \
-    printf '%s\n' \
-        '"""Bundled shim: expose the pip-installed cognee provider to dir-based memory discovery."""' \
-        'from cognee_integration_hermes import CogneeMemoryProvider, register  # noqa: F401' \
-        > /opt/hermes/plugins/memory/cognee/__init__.py && \
-    printf '%s\n' \
-        'name: cognee' \
-        'version: 0.1.0' \
-        'description: "Cognee — graph-based memory (cloud/remote mode)."' \
-        'pip_dependencies: []' \
-        'requires_env: []' \
-        'hooks:' \
-        '  - on_session_end' \
-        > /opt/hermes/plugins/memory/cognee/plugin.yaml && \
-    test -f /opt/hermes/plugins/memory/cognee/__init__.py && \
-    test -f /opt/hermes/plugins/memory/cognee/plugin.yaml && \
-    echo "cognee provider plugin dir created OK"
-
 # Patch the openai SDK's streaming Responses parser to tolerate a null
 # `response.output`. The ChatGPT Codex backend (chatgpt.com/backend-api/codex,
 # used by provider openai-codex) streams events with output=None, which
