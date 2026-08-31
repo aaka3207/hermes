@@ -13,6 +13,13 @@ services:
     ports:
       - "8642:8642"   # gateway API
       - "9119:9119"   # dashboard (only reached when HERMES_DASHBOARD=1)
+      # Spotify PKCE login's local callback listener (hermes_cli/auth.py).
+      # `hermes auth spotify` binds 127.0.0.1:43827 *inside this container's*
+      # network namespace, which is unreachable from the host or an SSH
+      # tunnel by default. Publishing it bound to the host's own loopback
+      # lets `ssh -L 43827:127.0.0.1:43827 <host>` (per hermes-agent's
+      # oauth-over-ssh.md guide) actually reach it.
+      - "127.0.0.1:43827:43827"
     volumes:
       - ~/.hermes:/opt/data
     environment:
