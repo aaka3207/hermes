@@ -57,6 +57,10 @@ Everything here is in the `Dockerfile`, layered onto `nousresearch/hermes-agent:
 | `syncthing` (apt) | Syncthing CLI available inside the image | The actual sync runs in the sidecar container; this is the binary |
 | `@anthropic-ai/claude-code` (npm, global) | Lets the agent shell out to Claude Code | |
 | `byterover-cli` (npm, global) | `brv` — portable memory/context CLI | Configured at deploy time (see below) |
+| `@upstash/cli` (npm, global) | `upstash` — manage Upstash Redis/QStash/Vector resources | Auth via `UPSTASH_EMAIL` + `UPSTASH_API_KEY` env (or `upstash auth login`) |
+| `vercel` (npm, global) | `vercel` / `vc` — deploy and inspect Vercel projects | Auth via `VERCEL_TOKEN` env |
+| `@posthog/cli` (npm, global) | `posthog-cli` — PostHog projects, sourcemaps, queries | npm wrapper downloads the Rust binary at install time |
+| `supabase` (npm, global) | `supabase` — link projects, push migrations, deploy functions, gen types | Remote commands need no Docker. Only `supabase start` (local stack) needs Docker, which this container does not have |
 | `hindsight-client==0.6.1` (uv pip) | Client for the self-hosted Hindsight memory server | A selectable memory provider |
 | `faster-whisper==1.2.1` (uv pip) | Local, free speech-to-text for Discord voice | Pinned to the exact version Hermes' lazy-deps expects |
 | `mnemosyne-memory[embeddings]==3.0.0` + `sqlite-vec==0.1.9` (uv pip) | Local-first SQLite memory provider with semantic vector search | Bundled as a first-class provider (see Memory) |
