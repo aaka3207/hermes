@@ -1,0 +1,11 @@
+# Local MCP server config — contains live credentials (Coolify access token,
+# SSH password). Never commit.
+.mcp.json
+
+# Local agent/tooling state
+.serena/
+.codex/
+.playwright-mcp/
+
+# OS
+.DS_Store
