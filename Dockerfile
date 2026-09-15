@@ -775,17 +775,15 @@ RUN printf '%s\n' \
 #     chmod +x /opt/hermes/bin/mnemosyne
 
 # ---------------------------------------------------------------------------
-# hermes-lcm #588 mitigation — applied at BOOT, not at build.
+# hermes-lcm #588 mitigation — SQLite POSIX-lock drop.
 #
-# Bug: LCM's artifact-permission helpers (_prepare_private_sqlite_file /
-# _restrict_existing_sqlite_artifacts in sqlite_util.py) do open(2) → fchmod(2)
-# → close(2) on the SQLite database and its -wal/-shm sidecars. Closing ANY
-# descriptor to a file drops that process's POSIX advisory locks on it
-# (https://sqlite.org/howtocorrupt.html), so this silently released SQLite's
-# locks — including the -shm DMS lock that stops another process unlinking the
-# live WAL. A short-lived `hermes` CLI against the same HERMES_HOME then
-# replaced the WAL/SHM pair while the long-lived gateway and dashboard kept
-# writing through the deleted inodes.
+# hermes-lcm's artifact-permission helpers do open(2) -> fchmod(2) -> close(2)
+# on lcm.db and its -wal/-shm sidecars. Closing ANY descriptor to a file drops
+# that process's POSIX advisory locks on it (https://sqlite.org/howtocorrupt.html),
+# which silently released SQLite's locks — including the -shm DMS lock that
+# stops another process unlinking the live WAL. A short-lived `hermes` CLI
+# against the same HERMES_HOME then replaced the WAL/SHM pair while the
+# long-lived gateway and dashboard kept writing through the deleted inodes.
 #
 # Observed here: every child-agent spawn fell back to the built-in compressor
 # ("could not be safely copied ... disk I/O error") 28 minutes after a clean
@@ -793,130 +791,40 @@ RUN printf '%s\n' \
 # on this host: 15 deleted lcm.db-wal/-shm handles held by the gateway and
 # dashboard, and ZERO POSIX locks on any lcm.db.
 #   upstream: https://github.com/stephenschoettler/hermes-lcm/issues/588
-#   our data: issue 588, comment 5684122223
+#   our data: that issue, comment 5684122223
 #
-# Why boot and not build: hermes-lcm is NOT in this image. It installs into
-# $HERMES_HOME/plugins on the runtime volume, so no build-time RUN can see it,
-# and any hand-patch there is silently reverted by the next plugin update. This
-# re-asserts the fix on every container start instead.
-#
-# Fail-closed, with one deliberate exception so an upstream FIX doesn't wedge
-# the deploy:
-#   * plugin absent                      -> skip, exit 0 (LCM is optional)
-#   * marker present                     -> no-op, exit 0 (idempotent)
-#   * anchor matches exactly once        -> patch, compile-check, verify marker
-#   * anchor gone AND no fchmod-on-fd    -> upstream fixed it; log, exit 0
-#   * anchor gone BUT fchmod still there -> EXIT 1; the code moved and we can
-#                                           no longer prove the lock-drop is
-#                                           gone. Refuse to boot rather than
-#                                           silently corrupt the database.
-RUN cat > /opt/hermes/docker/lcm-588-mitigation.py <<'PY'
-import hashlib, os, py_compile, shutil, sys, time
+# Unlike every patch above, this one canNOT run at build time: hermes-lcm is
+# not in this image. It installs into $HERMES_HOME/plugins on the runtime
+# volume, so the build cannot see it, and a hand-patch there is silently
+# reverted by the next plugin update. The entrypoint re-applies it on every
+# container start instead. Logic, exit codes and rationale live in
+# docker/lcm-588-mitigation.py; tests in tests/test_lcm_588_mitigation.py.
+COPY docker/lcm-588-mitigation.py docker/entrypoint-lcm-guard.sh /opt/hermes/docker/
+RUN chmod +x /opt/hermes/docker/lcm-588-mitigation.py \
+             /opt/hermes/docker/entrypoint-lcm-guard.sh
 
-MARKER = "__hermes_lcm_588_mitigation__"
-BASE = os.environ.get("HERMES_HOME") or "/opt/data"
-TARGET = os.path.join(BASE, "plugins", "hermes-lcm", "sqlite_util.py")
-TAG = "[lcm-588]"
-
-if not os.path.exists(TARGET):
-    print("%s hermes-lcm not installed at %s; nothing to patch" % (TAG, TARGET))
-    sys.exit(0)
-
-src = open(TARGET).read()
-if MARKER in src:
-    print("%s already patched (marker present): %s" % (TAG, TARGET))
-    sys.exit(0)
-
-OLD = """    if expected is not None:
-        _validate_sqlite_artifact(path, expected)
-
-    flags = os.O_RDWR"""
-
-NEW = """    if expected is not None:
-        _validate_sqlite_artifact(path, expected)
-        # """ + MARKER + """ -- hermes-lcm#588, injected by the Hermes image.
-        # Closing ANY descriptor to a file drops this process's POSIX advisory
-        # locks on it, so the open/fchmod/close below released SQLite's locks
-        # and let another process unlink the live -wal/-shm. When the artifact
-        # is already private there is nothing to change: return without ever
-        # opening it. Creation (expected is None) still takes the fd path,
-        # which is safe because no connection exists on that path yet.
-        if (
-            stat.S_ISREG(expected.st_mode)
-            and expected.st_nlink == 1
-            and not (expected.st_mode & 0o077)
-        ):
-            return True
-
-    flags = os.O_RDWR"""
-
-n = src.count(OLD)
-if n != 1:
-    if "os.fchmod(fd" not in src:
-        print("%s anchor absent and no fchmod-on-descriptor remains; "
-              "assuming upstream fixed #588. Continuing." % TAG)
-        sys.exit(0)
-    sys.exit("%s FATAL: anchor matched %d times but os.fchmod(fd, ...) is still "
-             "present in %s. The lock-dropping code moved; refusing to boot "
-             "rather than risk SQLite corruption. Re-check upstream #588."
-             % (TAG, n, TARGET))
-
-bak = "%s.bak-588-%s" % (TARGET, time.strftime("%Y%m%d-%H%M%S"))
-shutil.copy2(TARGET, bak)
-out = src.replace(OLD, NEW)
-
-# Atomic: write a sibling temp file, fsync, then rename over the target. A
-# plain open(TARGET, "w") truncates first, so a crash or OOM mid-write would
-# leave a half-written plugin and a container that cannot import LCM at all.
-tmp = "%s.tmp-588-%d" % (TARGET, os.getpid())
-try:
-    with open(tmp, "w") as fh:
-        fh.write(out)
-        fh.flush()
-        os.fsync(fh.fileno())
-    shutil.copystat(TARGET, tmp)
-    os.replace(tmp, TARGET)
-except BaseException:
-    if os.path.exists(tmp):
-        os.unlink(tmp)
-    raise
-
-try:
-    py_compile.compile(TARGET, doraise=True)
-except Exception as e:
-    shutil.copy2(bak, TARGET)
-    sys.exit("%s FATAL: patched file does not compile, reverted: %s" % (TAG, e))
-
-if MARKER not in open(TARGET).read():
-    shutil.copy2(bak, TARGET)
-    sys.exit("%s FATAL: marker missing after write, reverted" % TAG)
-
-print("%s patched %s (backup %s, sha256 %s)"
-      % (TAG, TARGET, bak, hashlib.sha256(out.encode()).hexdigest()[:16]))
-PY
-
-# Wrap the stock entrypoint so the mitigation runs before anything opens the
-# LCM database. `set -e` makes a non-zero exit from the patcher abort the boot.
-# Note: declaring ENTRYPOINT resets the base image's CMD, so re-declare it.
-RUN printf '%s\n' \
-        '#!/bin/sh' \
-        '# Re-assert the hermes-lcm #588 mitigation on the runtime volume,' \
-        '# then hand off to the stock dispatcher. See Dockerfile for rationale.' \
-        'set -e' \
-        '/opt/hermes/.venv/bin/python /opt/hermes/docker/lcm-588-mitigation.py' \
-        'exec /opt/hermes/docker/entrypoint-dispatch.sh "$@"' \
-        > /opt/hermes/docker/entrypoint-lcm-guard.sh && \
-    chmod +x /opt/hermes/docker/entrypoint-lcm-guard.sh
-
-ENTRYPOINT ["/opt/hermes/docker/entrypoint-lcm-guard.sh"]
-CMD ["gateway", "run"]
-
-# Build-time smoke check for the boot patcher. The mitigation itself can only
-# run at boot (the plugin is on the volume), but a heredoc that got mangled, or
-# a syntax error, must not ship: catch it here rather than at 3am when a
-# container refuses to start. Asserts the script compiles and that the
-# "plugin absent" branch exits 0 instead of wedging a container that has no LCM.
-RUN /opt/hermes/.venv/bin/python -m py_compile /opt/hermes/docker/lcm-588-mitigation.py && \
+# Smoke-check the copied script so a broken edit fails the BUILD rather than a
+# 3am container start: it must compile, and the absent-plugin branch must exit
+# 0 (a host with no LCM installed must still boot). The behavioural guarantee —
+# that an already-private artifact is never opened — is covered by
+# tests/test_lcm_588_mitigation.py, which runs on plain stdlib anywhere.
+RUN /opt/hermes/.venv/bin/python -m py_compile \
+        /opt/hermes/docker/lcm-588-mitigation.py && \
     HERMES_HOME=/nonexistent-lcm-smoke \
         /opt/hermes/.venv/bin/python /opt/hermes/docker/lcm-588-mitigation.py && \
     echo "lcm-588 boot patcher: compiles, absent-plugin branch exits 0"
+
+# Wrap the stock entrypoint so the mitigation runs before anything opens the
+# LCM database. Declaring ENTRYPOINT resets the base image's CMD, so re-declare
+# it — docker-compose.yaml passes `command: gateway run` for this service, so
+# the CMD here only matters for a bare `docker run`.
+#
+# Scope: only the `hermes` service builds from this Dockerfile, and it is the
+# only container that mounts the volume at /opt/data. Both processes that
+# corrupted the database (`hermes gateway run` and `hermes dashboard`) live in
+# it, so this guard covers the affected HERMES_HOME. hermes_webui runs a
+# different image (ghcr.io/nesquena/hermes-webui) and has its own unpatched LCM
+# under /home/hermeswebui/.hermes — independent, container-local, and not
+# shared with this volume, so it cannot corrupt /opt/data/lcm.db.
+ENTRYPOINT ["/opt/hermes/docker/entrypoint-lcm-guard.sh"]
+CMD ["gateway", "run"]
