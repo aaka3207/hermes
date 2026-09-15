@@ -9,3 +9,7 @@
 
 # OS
 .DS_Store
+
+# Python bytecode from the local test suite
+__pycache__/
+*.pyc
