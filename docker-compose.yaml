@@ -119,6 +119,26 @@ services:
       # author_id NULL), so writes from both agents were indistinguishable.
       - MNEMOSYNE_AUTHOR_ID=hermes
       - MNEMOSYNE_AUTHOR_TYPE=agent
+      # Cognee — graph memory for the `dinefile` profile only, in CLOUD mode.
+      # These vars are container-wide (both gateways see them), but only the
+      # profile whose config.yaml says `memory.provider: cognee` ever builds the
+      # provider, so the default profile is unaffected and stays on mnemosyne.
+      #
+      # A set COGNEE_BASE_URL is what selects remote/cloud mode (config.py
+      # load_config): with it, the plugin talks REST to the tenant and never
+      # imports the cognee package — which is why the image installs the plugin
+      # with --no-deps. Leaving it unset would fall back to local mode and try to
+      # spawn a server from a package that is not installed, so if these are ever
+      # cleared, clear `memory.provider` in the dinefile profile too.
+      # Both values are set in Coolify and reach the container via env_file: .env.
+      - COGNEE_BASE_URL=${COGNEE_BASE_URL}
+      - COGNEE_API_KEY=${COGNEE_API_KEY}
+      # Keep the graph for the business agent in its own dataset rather than the
+      # plugin default, so a future second cognee profile cannot silently merge
+      # into it. Per-profile overrides for this and the recall knobs go in
+      # /opt/data/profiles/dinefile/cognee.json, which load_config applies AFTER
+      # the environment — no rebuild or restart of the other profile needed.
+      - COGNEE_PLUGIN_DATASET=${COGNEE_PLUGIN_DATASET:-dinefile}
       # Obsidian vault + wiki paths for the agent (synced into /opt/data/Sync via
       # syncthing). Values are set in Coolify; referenced here so they reach the
       # hermes *runtime* container — Coolify otherwise only passes them as unused
