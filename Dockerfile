@@ -822,40 +822,78 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
     echo "lcm-588 boot patcher: compiles, absent-plugin branch exits 0"
 
 # ---------------------------------------------------------------- cognee-cloud
-# Cognee — graph-backed memory provider, CLOUD mode only. Active on the
-# `dinefile` profile (memory.provider: cognee in that profile's config.yaml);
-# the default profile stays on mnemosyne. Profiles are separate HERMES_HOMEs
-# with separate gateway processes, so the two never share a store.
+# Cognee — graph-backed memory provider, CLOUD mode. Active on the `dinefile`
+# profile (memory.provider: cognee in that profile's config.yaml); the default
+# profile stays on mnemosyne. Profiles are separate HERMES_HOMEs with separate
+# gateway processes, so the two never share a store.
 #
-# --no-deps is deliberate and is the whole reason this block can exist again.
-# The package pins cognee==1.5.x, which is what got the previous cognee block
-# removed in ccd1b05da: the base image sets `exclude-newer = "14 days"`
-# (/opt/hermes/pyproject.toml), and every cognee release spends its first two
-# weeks unresolvable, so the pin bricked the build. But in cloud mode the
-# plugin never imports that package -- `cognee_integration_hermes` is
-# stdlib-only, and a set COGNEE_BASE_URL selects http_backend.HttpBackend, a
-# plain urllib REST client. Dropping the pin therefore installs 1 package
-# instead of 65 (no litellm/pyarrow/pylance/rdflib/redis on this host, which
-# already crashed once under local ML inference) and removes the
-# exclude-newer exposure entirely rather than carving an exception for it.
+# The cognee pin is required even though cloud mode never calls into it:
 #
-# The load-bearing assumption -- "the cloud path is cognee-free" -- is not left
-# to a comment: docker/cognee-cloud-smoke.py imports the package with cognee
-# masked out and fails the BUILD if that stops being true. If it ever does,
-# drop --no-deps and add a `--exclude-newer-package cognee=<date>` exemption
-# (the base pyproject documents that shape as safe for exact pins).
+#     def is_available(self) -> bool:
+#         if not has_cognee():          # find_spec("cognee") is not None
+#             return False
+#         cfg = load_config()
+#         return bool(cfg.get("service_url") or cfg.get("llm_api_key"))
 #
-# 1.2.1 is a floor, not just a pin: 1.0.0-1.2.0 declared only the generic
-# `hermes_agent.plugins` group, which plugins/memory/__init__.py never reads,
-# so those installed a provider Hermes silently ignored (their issue #382).
-# No shim dir is needed any more -- unlike the removed block, this base image
-# does scan `hermes_agent.memory_providers` (plugins/memory/__init__.py:30).
+# is_available() short-circuits on the package BEFORE it looks at the mode, and
+# Hermes asks that before using a provider at all. #31 installed this --no-deps
+# on the (correct, irrelevant) grounds that the cloud path is stdlib-only; the
+# provider installed, imported and configured fine and reported "Status: not
+# available" forever. docker/cognee-cloud-smoke.py now asserts the gate itself.
 #
-# Worth bumping when it reaches PyPI: 1.2.2 dispatches the recall lanes
-# concurrently instead of one after another. Cloud mode pays a network round
-# trip per lane, so that is a per-turn latency win here specifically.
-RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache --no-deps \
-        "cognee-integration-hermes-agent==1.2.1" && \
+# That puts us back on the exclude-newer wall that removed the first cognee
+# block in ccd1b05da, and adds a second, harder one. Two constraints decide the
+# version here, and 1.2.1 -- what #31 pinned -- satisfies neither:
+#
+#   1. cognee's own dependency chain must not fight hermes-agent's pins.
+#      cognee==1.5.3 (what 1.2.1 requires) needs limits>=4.4.1,<5, which needs
+#      packaging>=21,<25 -- while hermes-agent exact-pins packaging==26.0. uv
+#      resolves that by silently DOWNGRADING packaging 26.0 -> 24.2 under the
+#      host application's own pin. Asking for both is simply unsatisfiable:
+#          "we can conclude that cognee-integration-hermes-agent==1.2.1
+#           depends on packaging>=21,<25 ... your requirements are unsatisfiable"
+#      cognee 1.5.4 moves to limits==5.8.0, which lifts the cap. So 1.2.2 is not
+#      a nice-to-have here, it is the first version that coexists with the image.
+#
+#   2. cognee 1.5.4 shipped 2026-09-04, inside the base image's
+#      `exclude-newer = "14 days"` (/opt/hermes/pyproject.toml), so a plain
+#      resolve fails with "there is no version of cognee==1.5.4". The exemption
+#      below is scoped to that one package and dated one day past its release --
+#      the shape the base pyproject already documents as safe ("Exempting exact
+#      pins is pure brick-risk removal at no supply-chain cost"). cognee==1.5.4
+#      is an exact pin held by the integration, so the cutoff adds no float
+#      protection here, only brick risk.
+#
+# Deliberately NOT `--exclude-newer-package cognee=$(date)`: a fixed date means a
+# future bump to a newer cognee fails this build loudly instead of silently
+# widening the window. Bump the pins together, or not at all.
+#
+# `packaging==26.0` is passed as a resolver guard, not because anything here
+# wants it: it makes constraint (1) self-enforcing, so if a future cognee
+# re-introduces the cap the build FAILS rather than quietly downgrading a
+# package hermes-agent exact-pins. Verified: with it, 64 installs, zero
+# removals, zero downgrades; openai and pydantic-core untouched, so the Codex
+# null-guard and the mnemosyne patches above still hold.
+#
+# Installed from a pinned commit because 1.2.2 is not on PyPI yet (latest there
+# is 1.2.1). Move to `cognee-integration-hermes-agent==1.2.2` when it publishes;
+# the commit and the released tree are the same code. 1.2.2 also dispatches the
+# recall lanes concurrently rather than serially, which cloud mode feels
+# directly -- it pays a network round trip per lane.
+#
+# None of the 64 packages reaches the per-turn path: a set COGNEE_BASE_URL
+# selects http_backend.HttpBackend, a urllib REST client. The smoke check
+# asserts that, and asserts is_available() -- see that file for why.
+#
+# 1.2.1 is still the floor for discovery: 1.0.0-1.2.0 declared only the generic
+# `hermes_agent.plugins` group, which plugins/memory/__init__.py never reads, so
+# those installed a provider Hermes silently ignored (upstream #382). No shim
+# dir is needed -- this base image does scan `hermes_agent.memory_providers`
+# (plugins/memory/__init__.py:30), unlike the image ccd1b05da was written for.
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
+        --exclude-newer-package "cognee=2026-09-05T00:00:00Z" \
+        "cognee-integration-hermes-agent @ git+https://github.com/topoteretes/cognee-integrations.git@9103726f69cd198eefc7aee720b509df5e47f906#subdirectory=integrations/hermes-agent" \
+        "packaging==26.0" && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py
 
 # Wrap the stock entrypoint so the mitigation runs before anything opens the
