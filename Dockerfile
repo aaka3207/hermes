@@ -32,10 +32,11 @@ RUN apt-get update && \
 # ("no plugin.yaml, depth cap reached"), so without this the provider silently
 # never registers (symptom: `hermes doctor` / `hermes memory doctor` reports
 # "mnemosyne plugin not found" despite __init__.py + register() being present
-# and importable). Same class of gap already solved for cognee above via its
-# hand-authored shim dir; mnemosyne instead symlinks straight into the
-# discovery dir, so the manifest is written into the real site-packages
-# directory the symlink resolves to.
+# and importable). mnemosyne symlinks straight into the discovery dir, so the
+# manifest is written into the real site-packages directory the symlink
+# resolves to. (Cognee below needs none of this: it ships its own plugin.yaml
+# and registers through the `hermes_agent.memory_providers` entry point, which
+# this base image scans — see plugins/memory/__init__.py:30.)
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-memory==3.15.1" sqlite-vec==0.1.9 && \
     PKGDIR="$(/opt/hermes/.venv/bin/python -c 'import importlib.util as u; print(u.find_spec("hermes_memory_provider").submodule_search_locations[0])')" && \
     printf '%s\n' \
@@ -57,6 +58,11 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache "mnemosyne-m
     /opt/hermes/.venv/bin/python -c "import importlib.util as u; assert u.find_spec('mnemosyne'), 'mnemosyne import failed'; print('mnemosyne provider linked OK')" && \
     test -f /opt/hermes/plugins/memory/mnemosyne/plugin.yaml && \
     echo "mnemosyne plugin.yaml present OK"
+
+# The second memory provider, Cognee (cloud mode, dinefile profile), installs
+# near the end of this file instead of here: it needs docker/cognee-cloud-smoke.py,
+# and sharing the one COPY there keeps this early, cache-stable region untouched
+# when that script changes. Search for "cognee-cloud".
 
 # Patch the openai SDK's streaming Responses parser to tolerate a null
 # `response.output`. The ChatGPT Codex backend (chatgpt.com/backend-api/codex,
@@ -799,7 +805,8 @@ RUN printf '%s\n' \
 # reverted by the next plugin update. The entrypoint re-applies it on every
 # container start instead. Logic, exit codes and rationale live in
 # docker/lcm-588-mitigation.py; tests in tests/test_lcm_588_mitigation.py.
-COPY docker/lcm-588-mitigation.py docker/entrypoint-lcm-guard.sh /opt/hermes/docker/
+COPY docker/lcm-588-mitigation.py docker/entrypoint-lcm-guard.sh \
+     docker/cognee-cloud-smoke.py /opt/hermes/docker/
 RUN chmod +x /opt/hermes/docker/lcm-588-mitigation.py \
              /opt/hermes/docker/entrypoint-lcm-guard.sh
 
@@ -813,6 +820,43 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
     HERMES_HOME=/nonexistent-lcm-smoke \
         /opt/hermes/.venv/bin/python /opt/hermes/docker/lcm-588-mitigation.py && \
     echo "lcm-588 boot patcher: compiles, absent-plugin branch exits 0"
+
+# ---------------------------------------------------------------- cognee-cloud
+# Cognee — graph-backed memory provider, CLOUD mode only. Active on the
+# `dinefile` profile (memory.provider: cognee in that profile's config.yaml);
+# the default profile stays on mnemosyne. Profiles are separate HERMES_HOMEs
+# with separate gateway processes, so the two never share a store.
+#
+# --no-deps is deliberate and is the whole reason this block can exist again.
+# The package pins cognee==1.5.x, which is what got the previous cognee block
+# removed in ccd1b05da: the base image sets `exclude-newer = "14 days"`
+# (/opt/hermes/pyproject.toml), and every cognee release spends its first two
+# weeks unresolvable, so the pin bricked the build. But in cloud mode the
+# plugin never imports that package -- `cognee_integration_hermes` is
+# stdlib-only, and a set COGNEE_BASE_URL selects http_backend.HttpBackend, a
+# plain urllib REST client. Dropping the pin therefore installs 1 package
+# instead of 65 (no litellm/pyarrow/pylance/rdflib/redis on this host, which
+# already crashed once under local ML inference) and removes the
+# exclude-newer exposure entirely rather than carving an exception for it.
+#
+# The load-bearing assumption -- "the cloud path is cognee-free" -- is not left
+# to a comment: docker/cognee-cloud-smoke.py imports the package with cognee
+# masked out and fails the BUILD if that stops being true. If it ever does,
+# drop --no-deps and add a `--exclude-newer-package cognee=<date>` exemption
+# (the base pyproject documents that shape as safe for exact pins).
+#
+# 1.2.1 is a floor, not just a pin: 1.0.0-1.2.0 declared only the generic
+# `hermes_agent.plugins` group, which plugins/memory/__init__.py never reads,
+# so those installed a provider Hermes silently ignored (their issue #382).
+# No shim dir is needed any more -- unlike the removed block, this base image
+# does scan `hermes_agent.memory_providers` (plugins/memory/__init__.py:30).
+#
+# Worth bumping when it reaches PyPI: 1.2.2 dispatches the recall lanes
+# concurrently instead of one after another. Cloud mode pays a network round
+# trip per lane, so that is a per-turn latency win here specifically.
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache --no-deps \
+        "cognee-integration-hermes-agent==1.2.1" && \
+    /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py
 
 # Wrap the stock entrypoint so the mitigation runs before anything opens the
 # LCM database. Declaring ENTRYPOINT resets the base image's CMD, so re-declare
