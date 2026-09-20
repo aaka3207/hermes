@@ -33,7 +33,7 @@ def probe(base_url):
         out["health"] = 200 <= code < 300
         try:
             out["version"] = (json.loads(body) or {}).get("version")
-        except ValueError:
+        except (ValueError, AttributeError, TypeError):
             pass
     except Exception as exc:
         out["health_error"] = str(exc)[:200]
@@ -47,6 +47,7 @@ def probe(base_url):
         out["auth_required"] = exc.code in (401, 403)
         out["auth_detail"] = "HTTP %d" % exc.code
     except Exception as exc:
+        out["auth_required"] = False
         out["auth_detail"] = str(exc)[:200]
 
     return out
@@ -66,6 +67,8 @@ if __name__ == "__main__":
             "backend answered an UNAUTHENTICATED request (%s) -- "
             "ENABLE_BACKEND_ACCESS_CONTROL is not in effect. Do not seed this "
             "deployment." % result.get("auth_detail"))
+    if result["health"] and result.get("version") is None:
+        problems.append("version not returned by /health -- cannot verify pin")
     version = result.get("version")
     if version and not str(version).startswith(EXPECTED_VERSION_PREFIX):
         problems.append("version %r does not match pin %s.x"
