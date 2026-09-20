@@ -21,10 +21,18 @@ services:
       # proxy to route to container port 8000; the variable's VALUE slot is
       # for a URL path, NOT a domain, so it is deliberately left empty here.
       # The domain itself is not set from the compose at all -- it lives in
-      # the service's Domains field in the Coolify UI, and must carry the
-      # internal port: `https://cognee.aakashe.org:8000`. Same shape as the
-      # existing metamcp service, whose stored domain is
-      # `http://metamcp.aakashe.org:12008`.
+      # the service's Domains field in the Coolify UI, where it must be
+      # exactly:  http://cognee.aakashe.org:8000
+      # Two details, both load-bearing, both matching every working service
+      # in this estate (http://metamcp.aakashe.org:12008,
+      # http://paperclip.aakashe.org:3100):
+      #   * the INTERNAL container port is part of the value;
+      #   * the scheme is http, NOT https. TLS terminates at Cloudflare and
+      #     the origin is reached over plain HTTP, so an https value makes
+      #     Traefik redirect to https forever -- curl reports
+      #     "Maximum (50) redirects followed" and the service looks down.
+      # CORS_ALLOWED_ORIGINS below stays https: that is the browser-facing
+      # origin, which is a different thing from the origin-side scheme.
       - SERVICE_FQDN_COGNEE_BACKEND_8000
       - ENV=prod
       - DEBUG=false
