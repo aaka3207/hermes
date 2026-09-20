@@ -7,8 +7,15 @@ safe because this file was never touched. The connection is opened through a
 `file:...?mode=ro` URI so a write is refused by SQLite rather than merely
 avoided by us.
 
+WHICH STORE: the live one is the Hermes gateway's, `/data/mnemosyne.db` inside
+the container (reported by mnemosyne_stats). It is NOT
+`~/.hermes/mnemosyne/data/mnemosyne.db` on the laptop -- that file is a stale
+Aug 2026 artifact whose three source tables are empty, so exporting it would
+silently produce an empty seed. Verify counts against mnemosyne_stats
+immediately before exporting, and pass the server path explicitly.
+
 Verified row counts on the live store (2026-09-20): memories 3, episodic_memory
-252, working_memory 1212 -- about 312 KB of prose in total.
+252, working_memory 1216 -- about 312 KB of prose in total.
 
 Usage:
   python3 scripts/cognee/export_mnemosyne.py /path/to/mnemosyne.db > seed.jsonl
