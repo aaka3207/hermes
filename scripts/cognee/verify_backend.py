@@ -17,9 +17,20 @@ import urllib.request
 
 EXPECTED_VERSION_PREFIX = "1.6"
 
+# Cloudflare fronts this deployment and answers urllib's default
+# "Python-urllib/3.x" agent with a 403 of its own, before the request ever
+# reaches Cognee. That 403 is indistinguishable from an auth refusal by status
+# code alone, so it would otherwise be read as PROOF that access control works
+# -- the exact failure this script exists to catch. Present a normal agent, and
+# separately require the edge-vs-origin check below.
+_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": "cognee-verify/1.0 (+hermes deploy check)",
+}
+
 
 def _get(url, timeout=15):
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(url, headers=dict(_HEADERS))
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.getcode(), resp.read().decode("utf-8", "replace")
 
@@ -44,8 +55,16 @@ def probe(base_url):
         out["auth_required"] = False
         out["auth_detail"] = "unauthenticated GET /api/v1/datasets returned %d" % code
     except urllib.error.HTTPError as exc:
-        out["auth_required"] = exc.code in (401, 403)
-        out["auth_detail"] = "HTTP %d" % exc.code
+        # Only trust a refusal that Cognee itself issued. An edge/CDN block is
+        # also a 403 but proves nothing about ENABLE_BACKEND_ACCESS_CONTROL, so
+        # require the backend to have answered /health in this same run.
+        served_by_origin = out["health"]
+        out["auth_required"] = exc.code in (401, 403) and served_by_origin
+        out["auth_detail"] = "HTTP %d%s" % (
+            exc.code,
+            "" if served_by_origin
+            else " (but /health did not respond -- refusal cannot be "
+                 "attributed to the backend; treating as NOT verified)")
     except Exception as exc:
         out["auth_required"] = False
         out["auth_detail"] = str(exc)[:200]
