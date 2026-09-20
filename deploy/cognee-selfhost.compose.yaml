@@ -1,0 +1,98 @@
+# Self-hosted Cognee for the personal Hermes profile and Claude Desktop.
+# Spec: hermes repo, docs/superpowers/specs/2026-09-20-cognee-selfhost-design.md
+#
+# Two clients share the STORE, not the transport:
+#   Hermes         -> cognee-backend directly (in-process plugin, X-Api-Key)
+#   Claude Desktop -> metamcp -> cognee-mcp -> cognee-backend
+#
+# NO `ports:` ANYWHERE. Host :8000 is the Coolify dashboard. Coolify routes the
+# backend's published domain through Traefik; everything else stays internal.
+services:
+  cognee-backend:
+    image: cognee/cognee:1.6.0
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8000"
+    environment:
+      - ENV=prod
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+
+      # --- security: every one of these defaults to something unsafe ---
+      - ENABLE_BACKEND_ACCESS_CONTROL=true
+      - FASTAPI_USERS_JWT_SECRET=${COGNEE_JWT_SECRET}
+      - CORS_ALLOWED_ORIGINS=${COGNEE_CORS_ORIGINS}
+      # Read ONLY on first boot. Changing these later does not update the
+      # already-created superuser.
+      - DEFAULT_USER_EMAIL=${COGNEE_DEFAULT_USER_EMAIL}
+      - DEFAULT_USER_PASSWORD=${COGNEE_DEFAULT_USER_PASSWORD}
+
+      # --- stores: postgres+pgvector relational/vector, embedded kuzu graph ---
+      - DB_PROVIDER=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=cognee_db
+      - DB_USERNAME=cognee
+      - DB_PASSWORD=${COGNEE_DB_PASSWORD}
+      - VECTOR_DB_PROVIDER=pgvector
+      - VECTOR_DB_HOST=postgres
+      - VECTOR_DB_PORT=5432
+      - VECTOR_DB_NAME=cognee_db
+      - GRAPH_DATABASE_PROVIDER=kuzu
+
+      # --- models: both halves via OpenRouter, Cognee's `custom` provider ---
+      - LLM_PROVIDER=custom
+      - LLM_MODEL=openrouter/deepseek/deepseek-v4-flash
+      - LLM_ENDPOINT=https://openrouter.ai/api/v1
+      - LLM_API_KEY=${OPENROUTER_API_KEY}
+      - EMBEDDING_PROVIDER=custom
+      - EMBEDDING_MODEL=openrouter/openai/text-embedding-3-small
+      - EMBEDDING_API_KEY=${OPENROUTER_API_KEY}
+      - EMBEDDING_DIMENSIONS=1536
+      # EMBEDDING_ENDPOINT is deliberately absent -- see compose_invariants.py.
+    volumes:
+      - cognee_system:/cognee-storage/system
+      - cognee_data:/cognee-storage/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  cognee-mcp:
+    image: cognee/cognee-mcp:main-bbec4a2
+    restart: always
+    depends_on:
+      - cognee-backend
+    expose:
+      - "8000"
+    environment:
+      # API mode: forward tool calls to the backend instead of running
+      # pipelines locally, so the backend stays the single owner of the stores.
+      - TRANSPORT_MODE=sse
+      - API_URL=http://cognee-backend:8000
+      - API_TOKEN=${COGNEE_MCP_API_TOKEN}
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: always
+    environment:
+      - POSTGRES_USER=cognee
+      - POSTGRES_DB=cognee_db
+      - POSTGRES_PASSWORD=${COGNEE_DB_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cognee -d cognee_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  cognee_system:
+  cognee_data:
+  pg_data:

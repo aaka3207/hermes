@@ -13,3 +13,5 @@
 # Python bytecode from the local test suite
 __pycache__/
 *.pyc
+deploy/*.env
+*.jsonl
