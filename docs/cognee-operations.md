@@ -69,14 +69,23 @@ dashboard itself. Publishing a container port there takes Coolify down.
 
 ### Pinned images and the fallback pair
 
-Everything is pinned. `cognee/cognee` and `cognee/cognee-ui` move together —
+Every image carries an explicit tag, and `compose_invariants.py` fails the
+build if one is loosened to `latest`/`main`. **A tag is not a digest.**
+Nothing here pins by `sha256:`, so what a tag resolves to can change if the
+publisher re-pushes it — `cognee:1.6.0` is a release tag and is unlikely to
+move, but `main-bbec4a2` is a *mutable branch-build tag that happens to
+contain a commit prefix*, not an immutable reference to that commit. What the
+pinning buys is that a redeploy does not silently pick up a newer release; it
+does not guarantee byte-identical images across redeploys. If that guarantee
+is ever needed, replace the tags with `@sha256:` digests.
+
+`cognee/cognee` and `cognee/cognee-ui` move together —
 the UI talks to the backend's API and a version skew shows up as a blank page
 with 422s in the browser console, not as a container failure. Treat
 `cognee:1.6.0` + `cognee-ui:1.6.0` as one unit and upgrade both or neither.
 
-`cognee-mcp` has no `1.6.0` tag; `main-bbec4a2` is the digest verified
-against this backend. `scripts/cognee/compose_invariants.py` enforces every
-pin and fails the build if one is loosened to `latest`.
+`cognee-mcp` has no `1.6.0` tag; `main-bbec4a2` is the branch-build tag
+verified against this backend.
 
 ---
 
@@ -91,7 +100,12 @@ routes via LiteLLM:
   dimensions.
 
 `EMBEDDING_DIMENSIONS` must match the model. It is written into the pgvector
-column type at first use, so changing it later is a reindex, not a restart.
+column type at first use, so it is fixed the moment the store has data:
+changing it later is **not** a restart. Every existing embedding was written
+at the old dimension, and recovering means re-embedding the entire corpus and
+rebuilding the column — paying the OpenRouter cost for all 1471 records
+again. Treat it as irreversible in practice. `compose_invariants.py` states
+the same thing in its violation message.
 
 `EMBEDDING_ENDPOINT` is **deliberately absent**. Setting it makes LiteLLM
 bypass its own OpenRouter routing and post raw to the URL, which fails with a
@@ -266,14 +280,33 @@ healthy. Fixed with `MCP_ALLOWED_HOSTS`, keeping the guard on rather than
 setting `MCP_DISABLE_DNS_REBINDING_PROTECTION=true`. **The `:*` port glob
 suffix is required on every entry** or the entry silently matches nothing.
 
-**The stale Mnemosyne copy.** There are two `mnemosyne.db` files on the
-server. `/opt/data/mnemosyne/data/mnemosyne.db` is the live one (3 / 252 /
-1216 rows, matching `mnemosyne_stats`).
-`/opt/data/mnemosyne/data/shared/mnemosyne.db` has a *different schema* and
-is not the store. Exporting the wrong one produces a small, clean-looking
-JSONL and a seed that quietly loses almost everything —
-`scripts/cognee/export_mnemosyne.py` therefore exits non-zero on a zero-record
-export and names this trap in the error.
+**The stale Mnemosyne copy.** The live store is
+**`/opt/data/mnemosyne/data/mnemosyne.db` on the server** — 3 / 252 / 1216
+rows, matching `mnemosyne_stats`. That is the one path; use it everywhere,
+including inside the `docker exec` in §8, where the Hermes container mounts
+it at the same path.
+
+Two decoys exist, and both look plausible:
+
+| Decoy | Why it is wrong |
+|---|---|
+| `/opt/data/mnemosyne/data/shared/mnemosyne.db` (server) | *different schema* — not the store |
+| `~/.hermes/mnemosyne/data/mnemosyne.db` (laptop) | stale Aug 2026 artifact, source tables empty |
+
+Exporting either produces a small, clean-looking JSONL and a seed that
+quietly loses almost everything. `scripts/cognee/export_mnemosyne.py`
+therefore exits non-zero on a zero-record export *and* on a partial one
+(any source table it could not read), naming the table and the error.
+
+**Do not `docker cp` the SQLite file and export the copy.** SQLite in WAL
+mode keeps recent writes in a sibling `mnemosyne.db-wal` file that has not
+been checkpointed into the main database yet. Copy the main file alone and a
+`mode=ro` read of it succeeds, reports a plausible row count, and silently
+omits every memory still sitting in the WAL — a clean-looking export that is
+quietly short. The `docker exec` form in §8 reads the live file in place,
+alongside its `-wal`, and avoids this entirely. If a copy is unavoidable,
+copy `mnemosyne.db`, `mnemosyne.db-wal` and `mnemosyne.db-shm` together and
+verify the row counts against `mnemosyne_stats` before seeding.
 
 **Leftover Coolify rows.** An orphaned `postgres` database resource (id 32,
 exited) remains from the naming collision above, and should be deleted from
@@ -305,17 +338,39 @@ python3 scripts/cognee/seed_cognee.py \
   https://cognee.aakashe.org "<api-key>" shared ~/cognee-seed.jsonl
 ```
 
-The seeder is **resumable**. It writes `<jsonl>.progress` — appended,
-flushed and fsynced after every confirmed send — and on restart skips what
-that file records. Interrupt it and re-run it; you get the original count,
-not duplicates. The checkpoint header validates the input's absolute path,
-the dataset name and the record count, so pointing a resume at a different
-file fails loudly instead of interleaving two corpora.
+The export step reads the live file **in place**, through the container that
+already has it mounted. Do not `docker cp` it out first — see §7 for why a
+copy without its `-wal` produces a clean-looking short export.
 
-Sends whose outcome is unknown (timeout, connection reset, `RemoteDisconnected`)
-are classified **ambiguous** and are never retried, because a retry of a send
-that actually landed is a duplicate memory that nothing will ever clean up.
-Ambiguous records are reported at the end for manual review.
+The seeder is **resumable**. It writes `<jsonl>.progress` — appended,
+flushed and fsynced after every POST — and on restart skips every record
+that file records, whether it was confirmed sent (`<index>`) or left
+ambiguous (`?<index>`). Only newline-terminated lines are read back, so a
+checkpoint torn by a kill mid-append discards the partial line rather than
+mis-parsing it as a different index. The checkpoint header validates the
+input's absolute path, the dataset name and the record count, so pointing a
+resume at a different file fails loudly instead of interleaving two corpora.
+Interrupt it and re-run it: the re-run POSTs only what is left, and a fully
+resumed run prints `seeded 0/1471 records (1471 already done, ...)` and exits
+0 — that line means "complete", not "nothing happened".
+
+Sends whose outcome is unknown are classified **ambiguous** and are never
+retried, because a retry of a send that actually landed is a duplicate memory
+that nothing will ever clean up. Ambiguous covers a lost response (timeout,
+connection reset, `RemoteDisconnected`) **and any 5xx**: `/api/v1/remember`
+persists the payload *before* running the LLM extraction pipeline, so a 500
+can mean "written, then blew up". Only a 429 and failures that provably never
+reached the server (connection refused, DNS failure) are retried; a 4xx is a
+plain failure. Every ambiguous record is written to the checkpoint so no
+resume re-sends it, listed by index on stdout at the end, and makes the exit
+code non-zero. Those indices are the ones to check by hand in the dataset.
+
+**`--restart` deletes the checkpoint and re-POSTs every record.** Against a
+dataset that already holds this corpus that is a second full copy of 1471
+memories, and a duplicate in the `shared` dataset cannot be cleaned up. The
+seeder prints a warning naming that risk before it does it. Use it only when
+seeding a corpus into a dataset that does not already have it — never as a
+response to a `seeded 0/1471` line.
 
 ---
 

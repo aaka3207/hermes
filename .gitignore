@@ -14,4 +14,11 @@
 __pycache__/
 *.pyc
 deploy/*.env
-*.jsonl
+
+# Mnemosyne -> Cognee seed corpora and the seeder's resume checkpoint. Scoped
+# to where they are actually produced, so a JSONL test fixture committed under
+# tests/ is not silently swallowed.
+/*.jsonl
+cognee-seed*.jsonl
+*.jsonl.progress
+/*.progress
