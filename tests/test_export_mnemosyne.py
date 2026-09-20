@@ -12,11 +12,15 @@ writing to it.
 """
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "cognee"))
 from export_mnemosyne import export
+
+SCRIPT = os.path.join(os.path.dirname(__file__), "..", "scripts", "cognee",
+                       "export_mnemosyne.py")
 
 failures = []
 
@@ -51,31 +55,60 @@ tmp = tempfile.mkdtemp(prefix="mnemo-export-")
 db = os.path.join(tmp, "mnemosyne.db")
 build_store(db)
 
-print("\n1/5 exports every non-empty row")
+print("\n1/7 exports every non-empty row")
 rows = export(db)
 check("3 rows exported", len(rows) == 3, "got %d" % len(rows))
 
-print("\n2/5 blank and null content are skipped")
+print("\n2/7 blank and null content are skipped")
 texts = [r["text"] for r in rows]
 check("no blank text", all(t and t.strip() for t in texts), repr(texts))
 
-print("\n3/5 every row is tagged with its source table")
+print("\n3/7 every row is tagged with its source table")
 sources = sorted({r["source"] for r in rows})
 check("sources tagged", sources == ["episodic_memory", "memories", "working_memory"],
       repr(sources))
 
-print("\n4/5 timestamps are preserved")
+print("\n4/7 timestamps are preserved")
 check("created_at preserved",
       any(r["created_at"] == "2026-01-01T00:00:00" for r in rows),
       repr([r["created_at"] for r in rows]))
 
-print("\n5/5 the source database is opened READ-ONLY")
+print("\n5/7 the source database is opened READ-ONLY")
 before = os.path.getmtime(db)
 export(db)
 after = os.path.getmtime(db)
 check("mtime unchanged", before == after, "%s -> %s" % (before, after))
 uri_used = getattr(export, "LAST_URI", "")
 check("opened via mode=ro URI", "mode=ro" in uri_used, repr(uri_used))
+
+def build_empty_store(path):
+    con = sqlite3.connect(path)
+    con.execute("create table memories (id integer primary key, content text, created_at text)")
+    con.execute("create table episodic_memory (id integer primary key, content text, created_at text)")
+    con.execute("create table working_memory (id integer primary key, content text, created_at text)")
+    con.commit()
+    con.close()
+
+
+empty_tmp = tempfile.mkdtemp(prefix="mnemo-export-empty-")
+empty_db = os.path.join(empty_tmp, "mnemosyne.db")
+build_empty_store(empty_db)
+
+print("\n6/7 a zero-record export exits non-zero")
+result = subprocess.run([sys.executable, SCRIPT, empty_db],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+check("non-zero exit on empty export", result.returncode != 0,
+      "returncode=%d stderr=%r" % (result.returncode, result.stderr))
+check("no stdout records on empty export", result.stdout.strip() == "",
+      repr(result.stdout))
+
+print("\n7/7 --force downgrades the empty-export failure to a warning")
+result = subprocess.run([sys.executable, SCRIPT, empty_db, "--force"],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+check("zero exit with --force", result.returncode == 0,
+      "returncode=%d stderr=%r" % (result.returncode, result.stderr))
+check("warning still printed to stderr with --force", "warning:" in result.stderr,
+      repr(result.stderr))
 
 print("")
 if failures:
