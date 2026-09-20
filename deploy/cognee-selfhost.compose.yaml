@@ -99,6 +99,11 @@ services:
       - TRANSPORT_MODE=sse
       - API_URL=http://cognee-backend:8000
       - API_TOKEN=${COGNEE_MCP_API_TOKEN}
+      # API_TOKEN defaults to a Bearer JWT for self-hosted backends. A JWT
+      # EXPIRES, which would break Claude Desktop silently weeks later with a
+      # 401 that looks like a config error. A Cognee API key does not expire,
+      # so force the x-api-key scheme and put an API key in the token slot.
+      - COGNEE_API_AUTH_SCHEME=x-api-key
 
   # Cognee's web UI. The browser talks to the BACKEND directly (not through
   # this container), so COGNEE_BACKEND_URL must be the backend's public
