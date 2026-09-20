@@ -104,6 +104,14 @@ services:
       # 401 that looks like a config error. A Cognee API key does not expire,
       # so force the x-api-key scheme and put an API key in the token slot.
       - COGNEE_API_AUTH_SCHEME=x-api-key
+      # The SSE transport validates the Host header against a loopback-only
+      # allowlist by default, so a request from metamcp -- whose Host is this
+      # container's DNS name -- is rejected before it reaches a tool. Name the
+      # hosts that may reach it instead of setting
+      # MCP_DISABLE_DNS_REBINDING_PROTECTION=true: the guard stays on, and the
+      # ":*" port glob suffix is REQUIRED on every entry or the entry silently
+      # matches nothing.
+      - MCP_ALLOWED_HOSTS=cognee-mcp:*,cognee-mcp-lndyf8z46p75oh524khm5z19:*,cognee-mcp.aakashe.org:*
 
   # Cognee's web UI. The browser talks to the BACKEND directly (not through
   # this container), so COGNEE_BACKEND_URL must be the backend's public
