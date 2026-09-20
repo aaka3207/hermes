@@ -42,6 +42,17 @@ def _request(base, method, path, *, data=None, headers=None, cookies=None):
     return json.loads(body) if body.strip() else None
 
 
+def _looks_masked(key):
+    """True if `key` is an elided display value rather than a usable secret.
+
+    Masking conventions vary ("sk-...abcd", "****abcd", "abcd••••"), so this
+    looks for the elision itself: a run of asterisks, bullets, or three or
+    more consecutive dots.
+    """
+    return ("***" in key or "•" in key or "…" in key
+            or "..." in key)
+
+
 def mint(base, email, password):
     form = urllib.parse.urlencode({"username": email, "password": password}).encode()
     login = _request(
@@ -53,9 +64,26 @@ def mint(base, email, password):
 
     cookies = {"auth_token": token}
     existing = _request(base, "GET", "/api/v1/auth/api-keys", cookies=cookies)
-    if isinstance(existing, list) and existing:
-        key = str(existing[0].get("key") or "")
-        if key:
+    if isinstance(existing, list):
+        for item in existing:
+            # Match on the name we asked for: taking existing[0] blindly
+            # hands back whatever key happens to be first, which may belong
+            # to something else entirely. A non-dict element is skipped
+            # rather than raising on .get.
+            if not isinstance(item, dict) or item.get("name") != KEY_NAME:
+                continue
+            key = str(item.get("key") or "")
+            if not key:
+                continue
+            if _looks_masked(key):
+                # Cognee has returned masked values on GET. Printing one as a
+                # working key produces a credential that 401s with no clue why.
+                raise SystemExit(
+                    "the backend returned the existing %r key MASKED (%r), so "
+                    "its real value cannot be read here. Delete that key in "
+                    "the Cognee UI and re-run to mint a fresh one, or copy the "
+                    "value you saved when it was created."
+                    % (KEY_NAME, key))
             return token, key, "reused"
 
     created = _request(
@@ -65,6 +93,11 @@ def mint(base, email, password):
     key = str((created or {}).get("key") or "")
     if not key:
         raise SystemExit("api-key creation returned no key")
+    if _looks_masked(key):
+        raise SystemExit(
+            "api-key creation returned a MASKED value (%r), not a usable key "
+            "-- read the real value from the Cognee UI instead of pasting "
+            "this" % key)
     return token, key, "created"
 
 
@@ -72,8 +105,14 @@ if __name__ == "__main__":
     if len(sys.argv) < 4:
         sys.exit("usage: mint_api_key.py <base-url> <email> <password>")
     bearer, api_key, how = mint(sys.argv[1], sys.argv[2], sys.argv[3])
-    print("api_key (%s)  -> Hermes cognee.json `api_key`, seed --api-key:" % how)
+    print("api_key (%s)  -> Hermes cognee.json `api_key`, seed <api-key>," % how)
+    print("                 AND Coolify COGNEE_MCP_API_TOKEN:")
     print(api_key)
     print()
-    print("bearer token -> Coolify COGNEE_MCP_API_TOKEN (see Task 8 caveat):")
+    print("The same API key goes in BOTH slots. Do NOT put the Bearer JWT in")
+    print("COGNEE_MCP_API_TOKEN: it is sent as x-api-key")
+    print("(COGNEE_API_AUTH_SCHEME=x-api-key) and, being a JWT, it EXPIRES --")
+    print("Claude Desktop would work today and 401 silently weeks later.")
+    print()
+    print("bearer token -> short-lived session JWT, for ad-hoc curl only:")
     print(bearer)
