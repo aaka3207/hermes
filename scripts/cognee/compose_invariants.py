@@ -7,6 +7,12 @@ image changes under a running deployment), no EMBEDDING_ENDPOINT (LiteLLM
 appends /embeddings itself and a set endpoint yields .../embeddings/embeddings
 -> 404). A human reading a diff does not notice a line that is not there.
 
+A smaller set of constraints are PRESENCES: certain settings must exist with
+an exact value (REQUIRED_SETTINGS). EMBEDDING_DIMENSIONS and EMBEDDING_MODEL
+are the sharpest of these -- both are irreversible once the store has been
+seeded, so a silent drift here is the most expensive failure this deployment
+can have.
+
 Deliberately regex/line based rather than YAML-parsing: it must run with no
 dependencies, in CI or on a bare host, and the checks are all lexical.
 """
@@ -21,6 +27,31 @@ PINNED = {
 }
 
 FLOATING_TAGS = ("latest", "main", "dev-canary", "buildcache")
+
+# Env vars that must be present with exactly this value. Anything not listed
+# here (secrets, per-deploy values like CORS origin) is intentionally out of
+# scope -- this is for settings a future edit could silently drift.
+REQUIRED_SETTINGS = {
+    "EMBEDDING_DIMENSIONS": "1536",
+    "EMBEDDING_MODEL": "openrouter/openai/text-embedding-3-small",
+    "LLM_MODEL": "openrouter/deepseek/deepseek-v4-flash",
+    "DB_PROVIDER": "postgres",
+    "VECTOR_DB_PROVIDER": "pgvector",
+    "GRAPH_DATABASE_PROVIDER": "kuzu",
+    "ENABLE_BACKEND_ACCESS_CONTROL": "true",
+    "ENV": "prod",
+    "DEBUG": "false",
+}
+
+# Changing these after the store has data corrupts it silently -- the
+# violation message says so explicitly, because that message is what someone
+# reads at 2am while deciding whether an edit is safe to ship.
+IRREVERSIBLE_SETTINGS = ("EMBEDDING_DIMENSIONS", "EMBEDDING_MODEL")
+
+_IRREVERSIBLE_NOTE = (
+    " -- this value is irreversible once the store is seeded: changing it "
+    "after data exists silently corrupts the embedding space rather than "
+    "erroring")
 
 
 def check_compose(text):
@@ -74,6 +105,25 @@ def check_compose(text):
             violations.append(
                 "line %d: FASTAPI_USERS_JWT_SECRET is left at the upstream "
                 "default 'super_secret'" % i)
+
+    setting_names = "|".join(re.escape(name) for name in REQUIRED_SETTINGS)
+    setting_pattern = re.compile(r"^-\s*(%s)=(.*)$" % setting_names)
+    found_settings = {}
+    for line in lines:
+        m = setting_pattern.match(line.strip())
+        if m and m.group(1) not in found_settings:
+            found_settings[m.group(1)] = m.group(2)
+
+    for name, required in REQUIRED_SETTINGS.items():
+        note = _IRREVERSIBLE_NOTE if name in IRREVERSIBLE_SETTINGS else ""
+        if name not in found_settings:
+            violations.append(
+                "required setting %s is missing from the compose%s"
+                % (name, note))
+        elif found_settings[name] != required:
+            violations.append(
+                "required setting %s must be %r, found %r%s"
+                % (name, required, found_settings[name], note))
 
     return violations
 

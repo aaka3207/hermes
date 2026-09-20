@@ -37,6 +37,9 @@ services:
       - ENABLE_BACKEND_ACCESS_CONTROL=true
       - FASTAPI_USERS_JWT_SECRET=${COGNEE_JWT_SECRET}
       - CORS_ALLOWED_ORIGINS=https://cognee.aakashe.org
+      - DB_PROVIDER=postgres
+      - VECTOR_DB_PROVIDER=pgvector
+      - GRAPH_DATABASE_PROVIDER=kuzu
       - EMBEDDING_DIMENSIONS=1536
       - EMBEDDING_MODEL=openrouter/openai/text-embedding-3-small
       - LLM_MODEL=openrouter/deepseek/deepseek-v4-flash
@@ -49,44 +52,69 @@ services:
 """
 
 
-def case(title, text, expect_substring):
+def case(title, text, expect_substrings):
+    """expect_substrings: None (expect zero violations), a single substring,
+    or a list of substrings that must each appear in some violation."""
     print("\n" + title)
     violations = check_compose(text)
     joined = " | ".join(violations)
-    if expect_substring is None:
+    if expect_substrings is None:
         check("no violations", violations == [], joined)
-    else:
-        check("flags %r" % expect_substring,
-              any(expect_substring in v for v in violations), joined or "(none)")
+        return
+    if isinstance(expect_substrings, str):
+        expect_substrings = [expect_substrings]
+    for substr in expect_substrings:
+        check("flags %r" % substr,
+              any(substr in v for v in violations), joined or "(none)")
 
 
-case("1/8 compliant compose passes", GOOD, None)
-case("2/8 published host port is rejected",
+case("1/13 compliant compose passes", GOOD, None)
+case("2/13 published host port is rejected",
      GOOD.replace('    expose:\n      - "8000"',
                   '    ports:\n      - "8000:8000"', 1),
      "ports")
-case("3/8 floating :latest tag is rejected",
+case("3/13 floating :latest tag on a pinned image is rejected",
      GOOD.replace("cognee/cognee:1.6.0", "cognee/cognee:latest"),
      "latest")
-case("4/8 floating :main tag is rejected",
+case("4/13 floating :main tag on a pinned image is rejected",
      GOOD.replace("cognee/cognee-mcp:main-bbec4a2", "cognee/cognee-mcp:main"),
      "main")
-case("5/8 EMBEDDING_ENDPOINT is rejected",
+# cases 3 and 4 above don't uniquely exercise the FLOATING_TAGS branch: both
+# images they mutate are also PINNED keys, so the `elif repo in PINNED`
+# fallback alone would still produce a message containing "latest"/"main".
+# This case uses an image that isn't in PINNED at all -- only the
+# FLOATING_TAGS branch can flag it.
+case("5/13 floating tag on a non-pinned image is rejected",
+     GOOD.replace("cognee/cognee:1.6.0", "myorg/sidecar:latest"),
+     "latest")
+case("6/13 EMBEDDING_ENDPOINT is rejected",
      GOOD.replace("      - EMBEDDING_DIMENSIONS=1536",
                   "      - EMBEDDING_ENDPOINT=https://openrouter.ai/api/v1\n"
                   "      - EMBEDDING_DIMENSIONS=1536"),
      "EMBEDDING_ENDPOINT")
-case("6/8 wildcard CORS is rejected",
+case("7/13 wildcard CORS is rejected",
      GOOD.replace("CORS_ALLOWED_ORIGINS=https://cognee.aakashe.org",
                   "CORS_ALLOWED_ORIGINS=*"),
      "CORS")
-case("7/8 default JWT secret is rejected",
+case("8/13 default JWT secret is rejected",
      GOOD.replace("FASTAPI_USERS_JWT_SECRET=${COGNEE_JWT_SECRET}",
                   "FASTAPI_USERS_JWT_SECRET=super_secret"),
      "super_secret")
-case("8/8 renamed service is rejected",
+case("9/13 renamed service is rejected",
      GOOD.replace("  cognee-backend:", "  cognee:"),
      "cognee-backend")
+case("10/13 missing EMBEDDING_DIMENSIONS is rejected as irreversible",
+     GOOD.replace("      - EMBEDDING_DIMENSIONS=1536\n", "", 1),
+     ["EMBEDDING_DIMENSIONS", "irreversible"])
+case("11/13 wrong EMBEDDING_DIMENSIONS value is rejected as irreversible",
+     GOOD.replace("EMBEDDING_DIMENSIONS=1536", "EMBEDDING_DIMENSIONS=3072"),
+     ["EMBEDDING_DIMENSIONS", "irreversible"])
+case("12/13 missing GRAPH_DATABASE_PROVIDER is rejected",
+     GOOD.replace("      - GRAPH_DATABASE_PROVIDER=kuzu\n", "", 1),
+     "GRAPH_DATABASE_PROVIDER")
+case("13/13 wrong GRAPH_DATABASE_PROVIDER value is rejected",
+     GOOD.replace("GRAPH_DATABASE_PROVIDER=kuzu", "GRAPH_DATABASE_PROVIDER=neo4j"),
+     "GRAPH_DATABASE_PROVIDER")
 
 print("")
 if failures:
