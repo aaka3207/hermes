@@ -7,10 +7,18 @@ safe because this file was never touched. The connection is opened through a
 `file:...?mode=ro` URI so a write is refused by SQLite rather than merely
 avoided by us.
 
-WHICH STORE: the live one is `/opt/data/mnemosyne/data/mnemosyne.db` on the
-server, reached in place through the Hermes container (see §8 of
-docs/cognee-operations.md), which mounts it at that same path. Two decoys
-exist and both look plausible:
+WHICH STORE: the live one is `/opt/data/mnemosyne/data/mnemosyne.db` INSIDE
+the Hermes container (see §8 of docs/cognee-operations.md). That path does
+NOT exist on the host -- `ls` it there and you get "No such file or
+directory".
+
+WHICH CONTAINER: `hermes-<appid>-<n>`, selected with
+`grep -E '^hermes-[^-]+-[0-9]+$'`. A plain `grep '^hermes-'` also matches
+`hermes-webui-...`, which does not mount the store; exporting from it fails
+with `sqlite3.OperationalError: unable to open database file`, which reads
+like a permissions problem and is not one.
+
+Two decoys exist and both look plausible:
 
   * `/opt/data/mnemosyne/data/shared/mnemosyne.db` (server) -- a DIFFERENT
     schema; not the store.

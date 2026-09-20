@@ -327,11 +327,18 @@ this stack.
 Two steps, one of them irreversible. Both are run by hand.
 
 ```bash
+# 0. Verify the live store FIRST (expect [3, 252, 1216]).
+#    The container is `hermes-<appid>-<n>`; `grep '^hermes-'` is WRONG because
+#    it also matches hermes-webui-..., which does not mount the store and
+#    fails with "unable to open database file".
+#    The path is INSIDE the container -- it does not exist on the host.
+HERMES=$(docker ps --format '{{.Names}}' | grep -E '^hermes-[^-]+-[0-9]+$')
+docker exec "$HERMES" python3 -c "import sqlite3;c=sqlite3.connect('file:/opt/data/mnemosyne/data/mnemosyne.db?mode=ro',uri=True);print([c.execute('select count(*) from '+t).fetchone()[0] for t in ('memories','episodic_memory','working_memory')])"
+
 # 1. Export (read-only; expect 1471 lines = 3 + 252 + 1216)
-ssh ameer@192.168.1.100 \
-  'docker exec -i hermes-tgg4k0sc8wgocck08cc4s4cg-153650733060 \
-     python3 - /opt/data/mnemosyne/data/mnemosyne.db' \
-  < scripts/cognee/export_mnemosyne.py > ~/cognee-seed.jsonl
+#    Run from the repo root on the laptop, NOT from inside an SSH session --
+#    it pipes the exporter from the repo into the container's stdin.
+ssh ameer@192.168.1.100 "docker exec -i \$(docker ps --format '{{.Names}}' | grep -E '^hermes-[^-]+-[0-9]+\$') python3 - /opt/data/mnemosyne/data/mnemosyne.db" < scripts/cognee/export_mnemosyne.py > ~/cognee-seed.jsonl
 
 # 2. Seed (IRREVERSIBLE -- writes into the shared dataset)
 python3 scripts/cognee/seed_cognee.py \
