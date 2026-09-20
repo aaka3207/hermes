@@ -18,11 +18,13 @@ dependencies, in CI or on a bare host, and the checks are all lexical.
 """
 import re
 
-REQUIRED_SERVICES = ("cognee-backend", "cognee-mcp", "cognee-postgres")
+REQUIRED_SERVICES = ("cognee-backend", "cognee-mcp", "cognee-ui",
+                     "cognee-postgres")
 
 PINNED = {
     "cognee/cognee": "1.6.0",
     "cognee/cognee-mcp": "main-bbec4a2",
+    "cognee/cognee-ui": "1.6.0",
     "pgvector/pgvector": "pg17",
 }
 

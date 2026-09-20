@@ -100,6 +100,29 @@ services:
       - API_URL=http://cognee-backend:8000
       - API_TOKEN=${COGNEE_MCP_API_TOKEN}
 
+  # Cognee's web UI. The browser talks to the BACKEND directly (not through
+  # this container), so COGNEE_BACKEND_URL must be the backend's public
+  # address as the browser sees it, and this UI's own origin must appear in
+  # the backend's CORS_ALLOWED_ORIGINS above -- otherwise every call from the
+  # page is blocked by the browser and the UI looks broken while the backend
+  # logs nothing.
+  # Domains field in Coolify, same http+port shape as the backend:
+  #   http://cognee-ui.aakashe.org:3000
+  cognee-ui:
+    image: cognee/cognee-ui:1.6.0
+    restart: always
+    depends_on:
+      cognee-backend:
+        condition: service_healthy
+    expose:
+      - "3000"
+    environment:
+      - SERVICE_FQDN_COGNEE_UI_3000
+      - COGNEE_BACKEND_URL=https://cognee.aakashe.org
+      # The UI's server-side routes fall back to a default-user login when the
+      # browser sent no credentials; must match the backend's value.
+      - DEFAULT_USER_PASSWORD=${COGNEE_DEFAULT_USER_PASSWORD}
+
   # NOT named `postgres`: Coolify's own database container, coolify-db,
   # publishes the alias `postgres` on the shared `coolify` network that this
   # stack joins. A service named `postgres` here resolves to THAT server and
