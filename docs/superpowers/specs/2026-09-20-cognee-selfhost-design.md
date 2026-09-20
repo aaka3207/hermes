@@ -38,24 +38,58 @@ A new Coolify application, `cognee`, deployed from a new repository
 the existing `mnemosyne-mcp` application rather than inventing a new pattern.
 
 ```
-  Claude Desktop                      Hermes gateway (personal profile)
-        |                                          |
-   MCP (SSE/HTTP)                        HTTP + X-Api-Key
-        |                                          |
-        v                                          |
-   cognee-mcp  ── HTTP (API mode) ──> cognee-backend <───────┘
-                                            |
-                                   +--------+--------+
-                                   |                 |
-                            postgres+pgvector    kuzu (embedded)
-                            relational+vector    graph
+  Claude Desktop                          Hermes gateway (personal profile)
+        |                                                |
+   HTTPS + metamcp API key                               |
+        |                                                |
+        v                                                |
+  metamcp (already deployed, public)                      |
+        |                                                |
+   http://cognee-mcp:8000/sse      ── shared `coolify` network ──
+        |                                                |
+        v                                     HTTP + X-Api-Key
+   cognee-mcp ── HTTP (API mode) ──> cognee-backend <────┘
+                                           |
+                                  +--------+--------+
+                                  |                 |
+                           postgres+pgvector    kuzu (embedded)
+                           relational+vector    graph
 ```
+
+Only `cognee-backend` is published to the internet (for its API and web UI).
+`cognee-mcp` and `postgres` stay internal.
+
+### Two independent client paths
+
+This is the most important thing to keep straight, because the two clients reach
+the same store by completely different routes:
+
+| Client | Transport | Path | Auth |
+|---|---|---|---|
+| **Hermes** | in-process plugin, plain HTTP | **directly to `cognee-backend`** | `X-Api-Key` |
+| **Claude Desktop** | MCP | metamcp → `cognee-mcp` → `cognee-backend` | metamcp API key |
+
+**Hermes does not use MCP and does not go through metamcp.** The
+`cognee_integration_hermes` plugin is already baked into the Hermes image and
+speaks REST to `/api/v1/remember`, `/api/v1/recall`, `/api/v1/improve`,
+`/api/v1/forget` directly. Routing Hermes through MCP would add two hops and a
+second auth scheme for no benefit, and would lose the plugin's session-layer
+recall, dataset switching and code-graph lanes, none of which the MCP tool surface
+exposes.
+
+They share the **store**, not the transport. That is the whole point: one backend
+owns the databases, and both clients are thin.
 
 | Service | Image | Exposure |
 |---|---|---|
-| `cognee-backend` | `cognee/cognee:1.5.4` | `cognee.aakashe.org` (API + UI) |
-| `cognee-mcp` | `cognee/cognee-mcp:main-20e0bd8` | `cognee-mcp.aakashe.org/sse` |
+| `cognee-backend` | `cognee/cognee:1.6.0` | `cognee.aakashe.org` (API + UI) |
+| `cognee-mcp` | `cognee/cognee-mcp:main-bbec4a2` | **internal only** — fronted by metamcp |
 | `postgres` | `pgvector/pgvector:pg17` | internal only |
+
+**Compose service names are load-bearing.** Coolify publishes each service's
+compose name as a DNS alias on the shared `coolify` network, which is how metamcp
+already reaches `http://monarch-mcp:9000/sse` (verified). The services must
+therefore be named exactly `cognee-backend` and `cognee-mcp`.
 
 `cognee-mcp` runs in **API mode** (`API_URL=http://cognee-backend:8000`). In this
 mode it forwards tool calls to the backend instead of running pipelines locally,
@@ -75,7 +109,7 @@ stores. That entire class of silent-fork failure does not exist here.
 
 - **Host port 8000 is already bound by the Coolify dashboard.** The compose file in
   Cognee's own Coolify guide publishes `ports: - "8000:8000"`, which would collide.
-  This deployment uses `expose` plus Coolify's `SERVICE_FQDN_*` variables and lets
+  This deployment uses `expose` plus Coolify's `SERVICE_FQDN_*` variable (backend only) and lets
   Traefik route by hostname. No host port publishing at all.
 - **Hermes is not on the shared `coolify` Docker network.** It sits alone on its app
   network `tgg4k0sc8wgocck08cc4s4cg`. See §6 for how the Hermes hop is resolved.
@@ -103,6 +137,38 @@ Host: 8 cores, 15 GiB RAM, ~7.4 GiB available, 2 GiB swap already in use, 364 GB
 disk free. Expected footprint for the three new containers is roughly 1.5–2 GB RSS.
 This fits, but the host is not spacious — it is the reason local inference is off
 the table and the reason Neo4j is rejected.
+
+---
+
+## 3a. Version pinning
+
+Verified 2026-09-20 by mapping GitHub release tags to their commits and matching
+those commits to published image tags. This is **not** inferred from build dates.
+
+| Release | Commit | `cognee` image | `cognee-mcp` image |
+|---|---|---|---|
+| **v1.6.0** (2026-09-18) | `bbec4a28b` | `cognee/cognee:1.6.0` | `cognee/cognee-mcp:main-bbec4a2` |
+| v1.5.4 (2026-09-04) | `20e0bd887` | `cognee/cognee:1.5.4` | `cognee/cognee-mcp:main-20e0bd8` |
+
+`cognee/cognee-mcp` publishes **no release semver tags** — its only semver-looking
+tags are dev builds (`1.5.3.dev1`, `1.5.0.dev5`). Releases ship as `main-<sha>`, so
+the MCP image must be pinned by commit. **Never use `main` or `latest`:** an
+unpinned image can change under a running deployment.
+
+**Decision: v1.6.0 / `main-bbec4a2`.** Three of its changes land directly on this
+design:
+
+- *"Fail search/recall on unresolvable dataset names — instead of proceeding
+  silently with incorrect assumptions."* This is the same class of failure that
+  bit the Mnemosyne deployment (silent fork, no error), and it matters here
+  because the Hermes plugin passes dataset **names**, not UUIDs (§5).
+- *"Scope agent prompt recall bodies to a dataset — reducing cross-dataset
+  leakage."* Datasets are this design's isolation boundary (§7).
+- *"Record and check embedding model once per dataset."* A guard against the one
+  irreversible decision in this design (§4).
+
+The counter-argument — a two-day-old release refactoring Postgres adapters — is
+addressed in §11.
 
 ---
 
@@ -199,28 +265,43 @@ service is publicly reachable.
   docs, self-hosted backends use Bearer while Cloud tenants are auto-detected and use
   `X-Api-Key`. **Open item:** if that token is a JWT it will expire, and the refresh
   story needs to be established at deploy time rather than assumed. See §11.
+- **Claude Desktop → metamcp:** metamcp API key (`enable_api_key_auth = true`),
+  exactly as for Mnemosyne today. See §9a.
+
+Note that a token expiry on the second bullet degrades **Claude Desktop only**.
+Hermes keeps working, because its path shares none of that machinery.
 
 ---
 
 ## 6. Reaching the backend from Hermes
 
-Both FQDNs resolve to Cloudflare (verified: `2606:4700:...`), so traffic exits to the
-Cloudflare edge and returns through the tunnel. Measured from inside the Hermes
-container against the existing `mnemosyne-mcp.aakashe.org`: **~70–110 ms** round trip.
+Hermes reaches the backend **directly from the plugin** (§2, "Two independent
+client paths"). It never goes through MCP or metamcp, so this hop is on the path of
+every single recall and remember — it is the latency-sensitive one.
 
-That is fine for a browser and for Claude Desktop. It is the wrong choice for Hermes,
-which would pay it on every recall and every remember, and which would gain a hard
-dependency on the Cloudflare tunnel for its memory to work at all.
+`cognee.aakashe.org` resolves to Cloudflare (verified: `2606:4700:...`), so traffic
+would exit to the Cloudflare edge and return through the tunnel. Measured from
+inside the Hermes container against the existing `mnemosyne-mcp.aakashe.org`:
+**~70–110 ms** round trip.
+
+Acceptable for a browser. Wrong for Hermes, which would pay it on every turn and
+would gain a hard dependency on the Cloudflare tunnel for its memory to work at all.
 
 **Decision:** enable Coolify's *Connect To Predefined Network* on both the `hermes`
 and `cognee` applications so both join the shared `coolify` bridge network. Hermes
-then reaches `http://cognee-backend:8000` directly. The FQDNs remain for Claude
-Desktop and the web UI.
+then reaches `http://cognee-backend:8000` over the local bridge.
 
-**Cost:** toggling the predefined network on the `hermes` app restarts it.
+This is **the established pattern in this estate, not a novel move** (verified
+2026-09-20): metamcp already sits on `coolify` and reaches
+`http://monarch-mcp:9000/sse` by compose-service alias. The same mechanism carries
+metamcp → `cognee-mcp` (§9a) and Hermes → `cognee-backend`.
+
+**Cost:** toggling the predefined network on the `hermes` app restarts it. This is
+the only change this design makes to the running Hermes application.
 
 **Fallback if that proves awkward:** point Hermes at `https://cognee.aakashe.org`.
-It works on day one with no networking changes, at ~100 ms per call.
+Works on day one with no networking changes, at ~100 ms per call — but note the
+tunnel dependency above before accepting it as permanent.
 
 ---
 
@@ -284,11 +365,34 @@ Three changes, all reversible.
 
 2. **`/opt/data/config.yaml`** — `memory.provider: mnemosyne` → `cognee`.
 
-3. **Claude Desktop** — add the `cognee-mcp` endpoint, either directly or through the
-   existing metamcp aggregator it already uses for Mnemosyne.
+3. **Claude Desktop** — register cognee in metamcp (see §9a). Hermes is unaffected
+   by this step; it does not go through metamcp.
 
 The container-wide `COGNEE_BASE_URL` / `COGNEE_API_KEY` environment variables stay
 pointed at Cognee Cloud, so `dinefile` is entirely unaffected.
+
+## 9a. Registering cognee in metamcp
+
+metamcp is already deployed, already public, and already the front door Claude
+Desktop uses. Fronting `cognee-mcp` with it means the MCP endpoint needs no public
+FQDN of its own — strictly less exposed than Mnemosyne, which is published at
+`mnemosyne-mcp.aakashe.org`.
+
+Mirror the existing `Monarch` registration, which already uses an internal URL
+(verified). Three rows, created through the metamcp **UI**, not raw SQL:
+
+| Table | Value |
+|---|---|
+| `mcp_servers` | name `cognee`, type `SSE`, url `http://cognee-mcp:8000/sse` |
+| `namespaces` | `cognee`, with the `cognee` server mapped into it |
+| `endpoints` | `cognee`, **`enable_api_key_auth = true`** |
+
+Claude Desktop then points at `https://metamcp.aakashe.org/metamcp/cognee/mcp`.
+
+`cognee-mcp` runs with `TRANSPORT_MODE=sse` to match how metamcp reaches Monarch
+and Mnemosyne today.
+
+---
 
 ### Rollback
 
@@ -325,8 +429,8 @@ The evaluation needs an endpoint, or it will run forever. Judge against Mnemosyn
 | `cognee-mcp` Bearer token expiry | **Open.** Must be established at deploy time. If it is a short-lived JWT, a refresh mechanism is needed or Claude Desktop will silently start 401ing. |
 | Cost and latency per turn | This is the finding being sought, not a defect. Measure it rather than predict it. |
 | Mnemosyne store goes stale | Inherent to the evaluation. Bounded by keeping the evaluation short. |
-| Backend image version | Pinned to `1.5.4` (stable, 2026-09-04) rather than `1.6.0` (2026-09-18, two days old) or `main`. The Hermes plugin package pins `cognee==1.5.x`. |
-| **MCP image has no matching semver tag** | Verified 2026-09-20: `cognee/cognee-mcp` publishes no `1.5.4`. Its only semver tags are dev builds (`1.5.3.dev1`, `1.5.0.dev5`); releases ship as `main-<sha>`. Pinned to `main-20e0bd8`, built 2026-09-04 — the same day as backend 1.5.4, so probably the matching commit, but this is **inferred from build date, not confirmed**. Verify the MCP tools work against the 1.5.4 backend at deploy time; if they do not, walk the `main-<sha>` tags. Do not use `main` or `latest` — an unpinned MCP image can change under a running deployment. |
+| v1.6.0 adapter refactor | v1.6.0 lists *"Database & adapter refactors may require review (including changes to Postgres/hybrid adapters). Self-hosted deployments should review their configuration."* That warning targets deployments **upgrading existing data** through the refactor. This is a greenfield deploy with no data to migrate, so it lands on the new adapters directly. Accepted — but if pgvector misbehaves on first boot, v1.5.4 / `main-20e0bd8` is the fallback pair. |
+| GLiNER dropped from the 1.6.0 image | v1.6.0 removes GLiNER from the default Docker image. Not used here — extraction goes to OpenRouter. Noted so it is not mistaken for a regression. |
 | Host headroom | ~7.4 GiB available with 2 GiB already swapped. Watch memory after deploy; this is the main reason for the store choices in §3. |
 | Hermes app UUID change | If the `hermes` Coolify app is ever recreated, its network name changes. Using the shared `coolify` network (§6) avoids inheriting the fragility already documented for Mnemosyne's bind-mount path. |
 
