@@ -89,8 +89,8 @@ the load is the irreversible half.
 - Create: `~/Documents/repos/hermes/deploy/cognee-selfhost.compose.yaml`
 - Create: `~/Documents/repos/hermes/deploy/cognee-selfhost.env.example`
 - Create: `~/Documents/repos/hermes/scripts/cognee/compose_invariants.py`
-- Create: `~/Documents/repos/hermes/docs/cognee-operations.md`
 - Test: `~/Documents/repos/hermes/tests/test_compose_invariants.py`
+- (`docs/cognee-operations.md` is written in Task 9, not here — Step 9 below only records what it will need.)
 
 **Interfaces:**
 - Consumes: nothing.
