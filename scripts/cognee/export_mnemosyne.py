@@ -7,12 +7,23 @@ safe because this file was never touched. The connection is opened through a
 `file:...?mode=ro` URI so a write is refused by SQLite rather than merely
 avoided by us.
 
-WHICH STORE: the live one is the Hermes gateway's, `/data/mnemosyne.db` inside
-the container (reported by mnemosyne_stats). It is NOT
-`~/.hermes/mnemosyne/data/mnemosyne.db` on the laptop -- that file is a stale
-Aug 2026 artifact whose three source tables are empty, so exporting it would
-silently produce an empty seed. Verify counts against mnemosyne_stats
-immediately before exporting, and pass the server path explicitly.
+WHICH STORE: the live one is `/opt/data/mnemosyne/data/mnemosyne.db` on the
+server, reached in place through the Hermes container (see §8 of
+docs/cognee-operations.md), which mounts it at that same path. Two decoys
+exist and both look plausible:
+
+  * `/opt/data/mnemosyne/data/shared/mnemosyne.db` (server) -- a DIFFERENT
+    schema; not the store.
+  * `~/.hermes/mnemosyne/data/mnemosyne.db` (laptop) -- a stale Aug 2026
+    artifact whose three source tables are empty.
+
+Exporting either silently produces a short or empty seed. Verify counts
+against mnemosyne_stats immediately before exporting, and pass the server
+path explicitly.
+
+Do NOT `docker cp` the database out and export the copy: SQLite keeps recent
+writes in a sibling `-wal` file, and a mode=ro read of a lone main file omits
+them while looking perfectly clean.
 
 Verified row counts on the live store (2026-09-20): memories 3, episodic_memory
 252, working_memory 1216 -- about 312 KB of prose in total.
@@ -25,6 +36,13 @@ empty laptop copy at ~/.hermes/mnemosyne/data/mnemosyne.db rather than the
 live store, and that failure must not be silent (a downstream seed step
 would otherwise happily consume an empty seed.jsonl). Pass --force to
 downgrade that failure to a warning when an empty export is intentional.
+
+A *partial* export exits non-zero for the same reason. If one table cannot
+be read (a renamed table, a `content` column that is now called something
+else), the export still emits every other table's rows and would otherwise
+look like a clean success -- the `memories` table is only 3 of 1471 rows,
+so losing all of it costs nothing visible while losing the canonical
+memories entirely. --force downgrades this too.
 """
 import json
 import sqlite3
@@ -102,12 +120,28 @@ if __name__ == "__main__":
         print("  %s: %d" % (table, counts.get(table, 0)), file=sys.stderr)
     print("total: %d" % total, file=sys.stderr)
 
+    skipped = export.LAST_SKIPPED
+    if skipped:
+        detail = "; ".join("%s (%s)" % (table, err) for table, err in skipped)
+        message = (
+            "%d of %d source table(s) could not be read and were omitted "
+            "entirely: %s -- this export is PARTIAL and seeding it would "
+            "silently drop every row of those tables"
+            % (len(skipped), len(TABLES), detail))
+        if force:
+            print("warning: %s" % message, file=sys.stderr)
+        else:
+            sys.exit("error: %s (pass --force to export anyway)" % message)
+
     if total == 0:
         message = (
-            "exported 0 records -- this is the signature of the stale, "
-            "empty laptop copy (~/.hermes/mnemosyne/data/mnemosyne.db), not "
-            "the live store; verify the path against mnemosyne_stats before "
-            "trusting this output")
+            "exported 0 records -- this is the signature of a decoy rather "
+            "than the live store. The live store is "
+            "/opt/data/mnemosyne/data/mnemosyne.db on the server; the empty "
+            "laptop copy at ~/.hermes/mnemosyne/data/mnemosyne.db and the "
+            "different-schema /opt/data/mnemosyne/data/shared/mnemosyne.db "
+            "both look like it. Verify the path against mnemosyne_stats "
+            "before trusting this output")
         if force:
             print("warning: %s" % message, file=sys.stderr)
         else:
