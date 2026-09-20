@@ -4,7 +4,7 @@
 
 **Goal:** Stand up self-hosted Cognee on Coolify, seeded from Mnemosyne, so the personal Hermes profile and Claude Desktop share one graph memory store — and so Cognee can be evaluated as a Mnemosyne replacement.
 
-**Architecture:** A new Coolify application (`cognee-backend` + `cognee-mcp` + `postgres`/pgvector) deployed from a new repo. Hermes reaches the backend **directly from its in-process plugin** over the shared `coolify` Docker network. Claude Desktop reaches it through the **existing metamcp aggregator**, so `cognee-mcp` needs no public exposure. Only the backend gets a public FQDN.
+**Architecture:** A new Coolify **Service** (`cognee-backend` + `cognee-mcp` + `postgres`/pgvector) deployed from an inline compose definition, with the file kept in this repo as the source of truth. No image is built — all three are stock upstream. Hermes reaches the backend **directly from its in-process plugin** over the shared `coolify` Docker network. Claude Desktop reaches it through the **existing metamcp aggregator**, so `cognee-mcp` needs no public exposure. Only the backend gets a public FQDN.
 
 **Tech Stack:** Docker Compose on Coolify, Cognee v1.6.0, pgvector/pg17, embedded Kuzu, OpenRouter (DeepSeek v4 Flash + `text-embedding-3-small`), Python 3 stdlib for all tooling.
 
@@ -27,66 +27,84 @@ Every task's requirements implicitly include this section. Values are copied ver
 - **Datasets:** `hermes` (personal, seed target), `shared` (cross-agent). `dinefile` stays on Cognee Cloud and is never touched.
 - **Never write to the Mnemosyne SQLite store.** Open it `?mode=ro` only.
 - **Production deploys and writes are gated.** Any step that deploys, restarts a running app, or edits `/opt/data/**` is marked **[GATED]** — prepare the exact command and hand it to the user. Do not execute it.
-- **Real script files, not inline heredocs.** Tooling lives in committed `scripts/*.py`.
+- **Real script files, not inline heredocs.** Tooling lives in committed `scripts/cognee/*.py`.
+- **The repo is the source of truth for the compose.** Coolify holds a pasted copy. Edit `deploy/cognee-selfhost.compose.yaml`, re-run the invariant checker, commit, *then* paste. Never the other way round.
 - **Tests are stdlib, run directly** (`python3 tests/test_x.py`), following `tests/test_cognee_cloud_smoke.py`: a module-level `failures = []`, a `check(name, ok, detail="")` helper, and `sys.exit("FAILED: %s" % failures)` at the end. No pytest.
 
-## Repositories
+## Where things live
 
-Two repos are involved. Know which one you are in.
+**One repo.** There is no image build anywhere in this plan — all three images
+are stock upstream — so git was only ever a place to keep a text file. The
+compose is deployed as a **Coolify Service with an inline definition** (the same
+shape as the existing `metamcp`, `paperclip` and `n8n` services, verified: they
+store `docker_compose_raw` on the Service, with `service_type: null`).
 
-| Repo | Path | Holds |
-|---|---|---|
-| `cognee-selfhost` (**new**) | `~/Documents/repos/cognee-selfhost` | `docker-compose.yaml`, `scripts/`, `tests/`, `README.md` |
-| `hermes` (existing) | `~/Documents/repos/hermes` | this plan, the spec, and the final operations doc |
+Coolify holds the *running* copy; this repo holds the *source of truth*. Config
+that exists only in Coolify's database has no diff, no review, and does not
+survive a Coolify rebuild — which is the same class of problem
+`docs/mnemosyne-operations.md` already flags about hand-maintained paths.
 
-Nothing in the Hermes repo's `docker-compose.yaml` or `Dockerfile` changes. The container-wide `COGNEE_BASE_URL` / `COGNEE_API_KEY` env vars stay pointed at Cognee Cloud so the `dinefile` profile is unaffected. The personal profile is switched by editing runtime files on the volume (Task 7), not repo files.
+**Nothing in this repo's own `docker-compose.yaml` or `Dockerfile` changes.**
+The container-wide `COGNEE_BASE_URL` / `COGNEE_API_KEY` stay pointed at Cognee
+Cloud so the `dinefile` profile is untouched. The personal profile is switched
+by editing runtime files on the Hermes volume (Task 7), not repo files.
 
 ## File Structure
 
 ```
-cognee-selfhost/
-├── docker-compose.yaml          # the 3 services; the single deployment artifact
-├── .env.example                 # every var, documented, no secrets
-├── README.md                    # deploy + rollback runbook
-├── scripts/
-│   ├── compose_invariants.py    # parses compose, asserts the Global Constraints
-│   ├── verify_backend.py        # /health, auth-required, version, store providers
-│   ├── mint_api_key.py          # login -> reuse-or-create API key
-│   ├── verify_plugin_surface.py # the 5 REST routes the Hermes plugin calls
-│   ├── export_mnemosyne.py      # SQLite (ro) -> JSONL records
-│   └── seed_cognee.py           # JSONL -> POST /api/v1/remember
-└── tests/
-    ├── test_compose_invariants.py
-    ├── test_export_mnemosyne.py
-    └── test_seed_cognee.py
+hermes/
+├── deploy/
+│   ├── cognee-selfhost.compose.yaml   # source of truth; pasted into Coolify
+│   └── cognee-selfhost.env.example    # every var, documented, no secrets
+├── scripts/cognee/
+│   ├── compose_invariants.py          # asserts the Global Constraints
+│   ├── verify_backend.py              # /health, auth-required, version
+│   ├── mint_api_key.py                # login -> reuse-or-create API key
+│   ├── verify_plugin_surface.py       # the REST routes the plugin calls
+│   ├── export_mnemosyne.py            # SQLite (ro) -> JSONL records
+│   └── seed_cognee.py                 # JSONL -> POST /api/v1/remember
+├── tests/
+│   ├── test_compose_invariants.py
+│   ├── test_export_mnemosyne.py
+│   └── test_seed_cognee.py
+└── docs/
+    └── cognee-operations.md           # written in Task 9; supersedes the spec
 ```
 
-Each script has one responsibility and is independently runnable. `export_mnemosyne.py` and `seed_cognee.py` are split deliberately: the export is pure local computation that can be inspected before a single token is spent, and the load is the irreversible half.
+`scripts/` is a new directory, per this repo's own RULES.md ("Place utility
+scripts in `scripts/`, `tools/`, or `bin/`"). Tests go in the existing `tests/`
+and follow `tests/test_cognee_cloud_smoke.py` exactly — stdlib only, run
+directly, no pytest.
+
+Each script has one responsibility and is independently runnable.
+`export_mnemosyne.py` and `seed_cognee.py` are split deliberately: the export is
+pure local computation that can be inspected before a single token is spent, and
+the load is the irreversible half.
 
 ---
 
-### Task 1: Repo scaffold and compose file
+### Task 1: Compose file and invariant checks
 
 **Files:**
-- Create: `~/Documents/repos/cognee-selfhost/docker-compose.yaml`
-- Create: `~/Documents/repos/cognee-selfhost/.env.example`
-- Create: `~/Documents/repos/cognee-selfhost/scripts/compose_invariants.py`
-- Create: `~/Documents/repos/cognee-selfhost/README.md`
-- Test: `~/Documents/repos/cognee-selfhost/tests/test_compose_invariants.py`
+- Create: `~/Documents/repos/hermes/deploy/cognee-selfhost.compose.yaml`
+- Create: `~/Documents/repos/hermes/deploy/cognee-selfhost.env.example`
+- Create: `~/Documents/repos/hermes/scripts/cognee/compose_invariants.py`
+- Create: `~/Documents/repos/hermes/docs/cognee-operations.md`
+- Test: `~/Documents/repos/hermes/tests/test_compose_invariants.py`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `scripts/compose_invariants.py` exposing `check_compose(text: str) -> list[str]`, returning a list of human-readable violation strings (empty list = compliant). Task 9 re-runs this as a regression guard.
+- Produces: `scripts/cognee/compose_invariants.py` exposing `check_compose(text: str) -> list[str]`, returning a list of human-readable violation strings (empty list = compliant). Task 9 re-runs this as a regression guard.
 
 The point of this task: the Global Constraints are mostly *absences* (no `ports:`, no `EMBEDDING_ENDPOINT`, no `latest` tag). Absences are exactly what human review misses, so they get a test.
 
-- [ ] **Step 1: Create the repo**
+- [ ] **Step 1: Create the directories and a feature branch**
 
 ```bash
-mkdir -p ~/Documents/repos/cognee-selfhost/{scripts,tests}
-cd ~/Documents/repos/cognee-selfhost
-git init -q
-printf '.env\n*.jsonl\n__pycache__/\n' > .gitignore
+cd ~/Documents/repos/hermes
+git checkout feat/cognee-selfhost      # already exists; holds the spec and this plan
+mkdir -p deploy scripts/cognee
+printf 'deploy/*.env\n*.jsonl\n' >> .gitignore
 ```
 
 - [ ] **Step 2: Write the failing test**
@@ -95,7 +113,7 @@ Create `tests/test_compose_invariants.py`:
 
 ```python
 #!/usr/bin/env python3
-"""Tests for scripts/compose_invariants.py.
+"""Tests for scripts/cognee/compose_invariants.py.
 
 Pure stdlib, no docker needed:
 
@@ -108,7 +126,7 @@ misses, so each one gets a case that proves the checker actually catches it.
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "cognee"))
 from compose_invariants import check_compose
 
 failures = []
@@ -192,12 +210,12 @@ print("all compose invariant tests passed")
 
 - [ ] **Step 3: Run it to make sure it fails**
 
-Run: `cd ~/Documents/repos/cognee-selfhost && python3 tests/test_compose_invariants.py`
+Run: `cd ~/Documents/repos/hermes && python3 tests/test_compose_invariants.py`
 Expected: FAIL — `ModuleNotFoundError: No module named 'compose_invariants'`
 
 - [ ] **Step 4: Write the checker**
 
-Create `scripts/compose_invariants.py`:
+Create `scripts/cognee/compose_invariants.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -282,7 +300,8 @@ def check_compose(text):
 
 if __name__ == "__main__":
     import sys
-    path = sys.argv[1] if len(sys.argv) > 1 else "docker-compose.yaml"
+    path = (sys.argv[1] if len(sys.argv) > 1
+            else "deploy/cognee-selfhost.compose.yaml")
     with open(path, encoding="utf-8") as handle:
         found = check_compose(handle.read())
     if found:
@@ -299,7 +318,7 @@ Expected: PASS — `all compose invariant tests passed`
 
 - [ ] **Step 6: Write the compose file**
 
-Create `docker-compose.yaml`:
+Create `deploy/cognee-selfhost.compose.yaml`:
 
 ```yaml
 # Self-hosted Cognee for the personal Hermes profile and Claude Desktop.
@@ -404,8 +423,8 @@ volumes:
 
 - [ ] **Step 7: Run the checker against the real file**
 
-Run: `python3 scripts/compose_invariants.py docker-compose.yaml`
-Expected: `docker-compose.yaml: compliant`
+Run: `python3 scripts/cognee/compose_invariants.py deploy/cognee-selfhost.compose.yaml`
+Expected: `deploy/cognee-selfhost.compose.yaml: compliant`
 
 - [ ] **Step 8: Write `.env.example`**
 
@@ -430,16 +449,16 @@ COGNEE_MCP_API_TOKEN=
 COGNEE_CORS_ORIGINS=https://cognee.aakashe.org
 ```
 
-- [ ] **Step 9: Write the README**
+- [ ] **Step 9: Note what the operations doc will need**
 
-`README.md` must contain: the two-client diagram from the spec, the deploy order (env vars BEFORE first deploy, because of the first-boot-only user), the pinned-image table with the fallback pair, and the one-line rollback (`memory.provider: cognee` -> `mnemosyne` in `/opt/data/config.yaml` on the Hermes volume).
+The full runbook is written in Task 9 as `docs/cognee-operations.md`. It must contain: the two-client diagram from the spec, the deploy order (env vars BEFORE first deploy, because of the first-boot-only user), the pinned-image table with the fallback pair, and the one-line rollback (`memory.provider: cognee` -> `mnemosyne` in `/opt/data/config.yaml` on the Hermes volume).
 
 - [ ] **Step 10: Commit**
 
 ```bash
-cd ~/Documents/repos/cognee-selfhost
-git add -A
-git commit -m "feat: compose and invariant checks for self-hosted Cognee
+cd ~/Documents/repos/hermes
+git add deploy/ scripts/cognee/compose_invariants.py tests/test_compose_invariants.py .gitignore
+git commit -m "feat(cognee): compose and invariant checks for self-hosted Cognee
 
 Host :8000 is the Coolify dashboard, so nothing publishes a host port.
 Images are pinned by version/commit because an unpinned tag changes under a
@@ -455,7 +474,7 @@ compose_invariants.py asserts each one."
 ### Task 2: Deploy and verify the backend **[GATED]**
 
 **Files:**
-- Create: `~/Documents/repos/cognee-selfhost/scripts/verify_backend.py`
+- Create: `~/Documents/repos/hermes/scripts/cognee/verify_backend.py`
 
 **Interfaces:**
 - Consumes: the deployed `cognee-backend`.
@@ -463,7 +482,7 @@ compose_invariants.py asserts each one."
 
 - [ ] **Step 1: Write the verifier**
 
-Create `scripts/verify_backend.py`:
+Create `scripts/cognee/verify_backend.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -476,7 +495,7 @@ Checks the three things that are cheap now and expensive later:
      store, and the failure is silent.
   3. the reported version matches the pin
 
-Usage: python3 scripts/verify_backend.py https://cognee.aakashe.org
+Usage: python3 scripts/cognee/verify_backend.py https://cognee.aakashe.org
 """
 import json
 import sys
@@ -549,26 +568,34 @@ if __name__ == "__main__":
 - [ ] **Step 2: Commit the verifier**
 
 ```bash
-git add scripts/verify_backend.py
-git commit -m "feat: pre-seed backend verification
+git add scripts/cognee/verify_backend.py
+git commit -m "feat(cognee): pre-seed backend verification
 
 Refusing an unauthenticated request is the load-bearing check. This backend is
 publicly reachable, and an open one is an open memory store that fails silently."
 ```
 
-- [ ] **Step 3: Push the repo and hand the deploy to the user [GATED]**
+- [ ] **Step 3: Hand the deploy to the user [GATED]**
 
-Create the GitHub repo and push, then **stop**. Present the user with:
+Print the compose file for pasting, then **stop**:
 
-1. Create a new Coolify application in the **Hermes** project, source = `aaka3207/cognee-selfhost`, branch `main`, build pack **Docker Compose**.
-2. **Before the first deploy**, set every variable from `.env.example` in Coolify's environment UI. `COGNEE_DEFAULT_USER_EMAIL` and `COGNEE_DEFAULT_USER_PASSWORD` are read **only on first boot**. Leave `COGNEE_MCP_API_TOKEN` empty for now.
-3. Enable **Connect To Predefined Network** on this application (needed by Tasks 6 and 8).
-4. Set the domain for the **`cognee-backend`** service to `https://cognee.aakashe.org` via the Coolify UI. Prefer the UI over a `SERVICE_FQDN_*` variable — the exact magic-variable spelling for a hyphenated service name is not worth guessing.
+```bash
+cat deploy/cognee-selfhost.compose.yaml
+```
+
+Present the user with:
+
+1. In Coolify, **Hermes** project → **+ New** → **Service** → **Docker Compose Empty**. Name it `cognee`. Paste the contents of `deploy/cognee-selfhost.compose.yaml` into the compose definition.
+2. **Before the first deploy**, set every variable from `deploy/cognee-selfhost.env.example` in Coolify's environment UI. `COGNEE_DEFAULT_USER_EMAIL` and `COGNEE_DEFAULT_USER_PASSWORD` are read **only on first boot** and cannot be changed afterwards. Leave `COGNEE_MCP_API_TOKEN` empty for now — it is filled in Task 8.
+3. Enable **Connect To Predefined Network** on this service. Verified 2026-09-20: Coolify Services do **not** join the shared `coolify` network by default (`paperclip`, its `db`, and `windmill-server` are each only on their own app network), so this must be set explicitly. Tasks 6 and 8 depend on it.
+4. Set the domain for the **`cognee-backend`** service to `https://cognee.aakashe.org` in the Coolify UI. Prefer the UI over a `SERVICE_FQDN_*` variable — the magic-variable spelling for a hyphenated service name is not worth guessing.
 5. Deploy.
+
+**Whenever the compose changes later, edit `deploy/cognee-selfhost.compose.yaml` first, re-run the invariant checker, commit, and only then paste into Coolify.** The repo is the source of truth; Coolify holds a copy.
 
 - [ ] **Step 4: Verify the deployment**
 
-Run: `python3 scripts/verify_backend.py https://cognee.aakashe.org`
+Run: `python3 scripts/cognee/verify_backend.py https://cognee.aakashe.org`
 Expected: `backend verified`
 
 **If `auth_required` is false, stop.** Do not continue to Task 3. Fix `ENABLE_BACKEND_ACCESS_CONTROL` and redeploy first.
@@ -588,8 +615,8 @@ Expected: the three new containers total well under 2 GB. If the host has starte
 ### Task 3: Mint the API key and verify the plugin's REST surface
 
 **Files:**
-- Create: `~/Documents/repos/cognee-selfhost/scripts/mint_api_key.py`
-- Create: `~/Documents/repos/cognee-selfhost/scripts/verify_plugin_surface.py`
+- Create: `~/Documents/repos/hermes/scripts/cognee/mint_api_key.py`
+- Create: `~/Documents/repos/hermes/scripts/cognee/verify_plugin_surface.py`
 
 **Interfaces:**
 - Consumes: a verified backend from Task 2.
@@ -599,7 +626,7 @@ Why this task exists separately: the Hermes plugin will **not** mint its own key
 
 - [ ] **Step 1: Write the minter**
 
-Create `scripts/mint_api_key.py`:
+Create `scripts/cognee/mint_api_key.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -614,7 +641,7 @@ Mirrors the plugin's own flow exactly (POST /api/v1/auth/login ->
 GET/POST /api/v1/auth/api-keys) so that what is minted is what it expects.
 
 Usage:
-  python3 scripts/mint_api_key.py https://cognee.aakashe.org <email> <password>
+  python3 scripts/cognee/mint_api_key.py https://cognee.aakashe.org <email> <password>
 """
 import json
 import sys
@@ -674,7 +701,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Write the surface verifier**
 
-Create `scripts/verify_plugin_surface.py`:
+Create `scripts/cognee/verify_plugin_surface.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -686,7 +713,7 @@ does too, BEFORE Hermes is repointed -- otherwise the first failure shows up as
 a broken agent rather than a failed check.
 
 Usage:
-  python3 scripts/verify_plugin_surface.py <base-url> <api-key> [dataset]
+  python3 scripts/cognee/verify_plugin_surface.py <base-url> <api-key> [dataset]
 """
 import json
 import sys
@@ -762,14 +789,14 @@ if __name__ == "__main__":
 Hand the user:
 
 ```bash
-cd ~/Documents/repos/cognee-selfhost
-python3 scripts/mint_api_key.py https://cognee.aakashe.org \
+cd ~/Documents/repos/hermes
+python3 scripts/cognee/mint_api_key.py https://cognee.aakashe.org \
   "<COGNEE_DEFAULT_USER_EMAIL>" "<COGNEE_DEFAULT_USER_PASSWORD>"
 ```
 
 - [ ] **Step 4: Verify the surface**
 
-Run: `python3 scripts/verify_plugin_surface.py https://cognee.aakashe.org "<api-key>" hermes`
+Run: `python3 scripts/cognee/verify_plugin_surface.py https://cognee.aakashe.org "<api-key>" hermes`
 Expected: `plugin REST surface verified`, with both `hermes` and `shared` created and listed.
 
 **If `/api/v1/recall` returns 404, stop and reassess.** That route existing is the assumption the entire design rests on.
@@ -777,8 +804,8 @@ Expected: `plugin REST surface verified`, with both `hermes` and `shared` create
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/mint_api_key.py scripts/verify_plugin_surface.py
-git commit -m "feat: API key minting and plugin REST surface verification
+git add scripts/cognee/mint_api_key.py scripts/cognee/verify_plugin_surface.py
+git commit -m "feat(cognee): API key minting and REST surface verification
 
 The plugin refuses to mint a key for a non-local URL, so the key must exist
 before Hermes is repointed. Verifying /api/v1/recall before seeding turns the
@@ -790,8 +817,8 @@ design's core assumption into a check instead of a broken agent."
 ### Task 4: Export the Mnemosyne store
 
 **Files:**
-- Create: `~/Documents/repos/cognee-selfhost/scripts/export_mnemosyne.py`
-- Test: `~/Documents/repos/cognee-selfhost/tests/test_export_mnemosyne.py`
+- Create: `~/Documents/repos/hermes/scripts/cognee/export_mnemosyne.py`
+- Test: `~/Documents/repos/hermes/tests/test_export_mnemosyne.py`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -805,7 +832,7 @@ Create `tests/test_export_mnemosyne.py`:
 
 ```python
 #!/usr/bin/env python3
-"""Tests for scripts/export_mnemosyne.py.
+"""Tests for scripts/cognee/export_mnemosyne.py.
 
 Builds a synthetic SQLite store with the real Mnemosyne table shapes, so no
 access to the live 95 MB store is needed and the tests are safe to run anywhere.
@@ -821,7 +848,7 @@ import sqlite3
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "cognee"))
 from export_mnemosyne import export
 
 failures = []
@@ -896,7 +923,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'export_mnemosyne'`
 
 - [ ] **Step 3: Write the exporter**
 
-Create `scripts/export_mnemosyne.py`:
+Create `scripts/cognee/export_mnemosyne.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -912,7 +939,7 @@ Verified row counts on the live store (2026-09-20): memories 3, episodic_memory
 252, working_memory 1212 -- about 312 KB of prose in total.
 
 Usage:
-  python3 scripts/export_mnemosyne.py /path/to/mnemosyne.db > seed.jsonl
+  python3 scripts/cognee/export_mnemosyne.py /path/to/mnemosyne.db > seed.jsonl
 """
 import json
 import sqlite3
@@ -967,8 +994,8 @@ Expected: PASS — `all mnemosyne export tests passed`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/export_mnemosyne.py tests/test_export_mnemosyne.py
-git commit -m "feat: read-only Mnemosyne exporter
+git add scripts/cognee/export_mnemosyne.py tests/test_export_mnemosyne.py
+git commit -m "feat(cognee): read-only Mnemosyne exporter
 
 Opened through a file:...?mode=ro URI so SQLite refuses a write rather than us
 merely not attempting one. The live store is the rollback path for the whole
@@ -980,8 +1007,8 @@ evaluation; it must come out of this unchanged."
 ### Task 5: Seed Cognee **[GATED run]**
 
 **Files:**
-- Create: `~/Documents/repos/cognee-selfhost/scripts/seed_cognee.py`
-- Test: `~/Documents/repos/cognee-selfhost/tests/test_seed_cognee.py`
+- Create: `~/Documents/repos/hermes/scripts/cognee/seed_cognee.py`
+- Test: `~/Documents/repos/hermes/tests/test_seed_cognee.py`
 
 **Interfaces:**
 - Consumes: JSONL records from Task 4 (`{source, text, created_at}`); an API key from Task 3.
@@ -993,7 +1020,7 @@ Create `tests/test_seed_cognee.py`:
 
 ```python
 #!/usr/bin/env python3
-"""Tests for scripts/seed_cognee.py, against a real local HTTP server.
+"""Tests for scripts/cognee/seed_cognee.py, against a real local HTTP server.
 
     python3 tests/test_seed_cognee.py
 
@@ -1007,7 +1034,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "cognee"))
 from seed_cognee import seed
 
 failures = []
@@ -1102,14 +1129,14 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'seed_cognee'`
 
 - [ ] **Step 3: Write the seeder**
 
-Create `scripts/seed_cognee.py`:
+Create `scripts/cognee/seed_cognee.py`:
 
 ```python
 #!/usr/bin/env python3
 """Load exported Mnemosyne records into a Cognee dataset.
 
 This is the irreversible half: it spends OpenRouter tokens and writes the
-`hermes` dataset. Run scripts/export_mnemosyne.py first and read the JSONL.
+`hermes` dataset. Run scripts/cognee/export_mnemosyne.py first and read the JSONL.
 
 Provenance (source table + timestamp) is prepended to each record's text rather
 than dropped. Cognee extracts entities from the text it is given, so a bare
@@ -1120,8 +1147,8 @@ A transient failure is retried: a dropped record is a silently missing memory,
 and there is no natural place to notice it.
 
 Usage:
-  python3 scripts/export_mnemosyne.py mnemosyne.db > seed.jsonl
-  python3 scripts/seed_cognee.py https://cognee.aakashe.org <api-key> hermes seed.jsonl
+  python3 scripts/cognee/export_mnemosyne.py mnemosyne.db > seed.jsonl
+  python3 scripts/cognee/seed_cognee.py https://cognee.aakashe.org <api-key> hermes seed.jsonl
 """
 import json
 import sys
@@ -1217,8 +1244,8 @@ Expected: PASS — `all cognee seed tests passed`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/seed_cognee.py tests/test_seed_cognee.py
-git commit -m "feat: Cognee seeder with provenance and retry
+git add scripts/cognee/seed_cognee.py tests/test_seed_cognee.py
+git commit -m "feat(cognee): seeder with provenance and retry
 
 Provenance is prepended to each record because Cognee extracts from the text it
 is given; a bare sentence loses when the memory was formed. Transient failures
@@ -1232,7 +1259,7 @@ Run it from inside the Hermes container, which already has Python 3 and has the
 Mnemosyne volume mounted at `/opt/data/mnemosyne/data`. Hand the user:
 
 ```bash
-docker cp scripts/export_mnemosyne.py \
+docker cp scripts/cognee/export_mnemosyne.py \
   hermes-tgg4k0sc8wgocck08cc4s4cg-153650733060:/tmp/export_mnemosyne.py
 docker exec hermes-tgg4k0sc8wgocck08cc4s4cg-153650733060 \
   /opt/hermes/.venv/bin/python /tmp/export_mnemosyne.py \
@@ -1248,7 +1275,7 @@ Expected: ~1467 lines; each line has `source`, `text`, `created_at`. If the coun
 - [ ] **Step 8: Run the seed [GATED]**
 
 ```bash
-python3 scripts/seed_cognee.py https://cognee.aakashe.org "<api-key>" hermes ~/cognee-seed.jsonl
+python3 scripts/cognee/seed_cognee.py https://cognee.aakashe.org "<api-key>" hermes ~/cognee-seed.jsonl
 ```
 
 Expected: `seeded 1467/1467 records`. This is where OpenRouter tokens are spent (~$0.0016 embeddings plus a few cents of extraction).
@@ -1256,7 +1283,7 @@ Expected: `seeded 1467/1467 records`. This is where OpenRouter tokens are spent 
 - [ ] **Step 9: Confirm the graph actually built [GATED]**
 
 ```bash
-python3 scripts/verify_plugin_surface.py https://cognee.aakashe.org "<api-key>" hermes
+python3 scripts/cognee/verify_plugin_surface.py https://cognee.aakashe.org "<api-key>" hermes
 ```
 
 Then a real recall for something only the seed could know:
@@ -1447,7 +1474,6 @@ Record in the operations doc whether `COGNEE_MCP_API_TOKEN` is a long-lived key 
 
 **Files:**
 - Create: `~/Documents/repos/hermes/docs/cognee-operations.md`
-- Modify: `~/Documents/repos/cognee-selfhost/README.md`
 
 **Interfaces:**
 - Consumes: findings from every prior task.
@@ -1456,11 +1482,13 @@ Record in the operations doc whether `COGNEE_MCP_API_TOKEN` is a long-lived key 
 - [ ] **Step 1: Re-run every test as a regression gate**
 
 ```bash
-cd ~/Documents/repos/cognee-selfhost
-python3 scripts/compose_invariants.py docker-compose.yaml
+cd ~/Documents/repos/hermes
+python3 scripts/cognee/compose_invariants.py deploy/cognee-selfhost.compose.yaml
 python3 tests/test_compose_invariants.py
 python3 tests/test_export_mnemosyne.py
 python3 tests/test_seed_cognee.py
+# the pre-existing suite must still pass -- nothing here should touch it
+python3 tests/test_cognee_cloud_smoke.py
 ```
 
 Expected: all pass.
@@ -1481,7 +1509,7 @@ Mirror `docs/mnemosyne-operations.md`. It must contain:
 
 Against the spec's §10 criteria, state plainly whether Cognee should replace Mnemosyne, and why. An evaluation with no recorded verdict becomes the new status quo by default — and every day it runs, the Mnemosyne store goes staler and rollback costs more.
 
-- [ ] **Step 4: Commit both repos**
+- [ ] **Step 4: Commit**
 
 ```bash
 cd ~/Documents/repos/hermes
@@ -1490,10 +1518,6 @@ git commit -m "docs(cognee): operations handoff for self-hosted Cognee
 
 Supersedes the design spec. Records the measured evaluation results, the
 rollback command, and the api_key inheritance trap between the two profiles."
-
-cd ~/Documents/repos/cognee-selfhost
-git add README.md
-git commit -m "docs: deploy and rollback runbook"
 ```
 
 ---
