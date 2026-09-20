@@ -47,7 +47,7 @@ services:
     image: cognee/cognee-mcp:main-bbec4a2
     expose:
       - "8000"
-  postgres:
+  cognee-postgres:
     image: pgvector/pgvector:pg17
 """
 

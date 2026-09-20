@@ -12,7 +12,7 @@ services:
     image: cognee/cognee:1.6.0
     restart: always
     depends_on:
-      postgres:
+      cognee-postgres:
         condition: service_healthy
     expose:
       - "8000"
@@ -41,13 +41,13 @@ services:
 
       # --- stores: postgres+pgvector relational/vector, embedded kuzu graph ---
       - DB_PROVIDER=postgres
-      - DB_HOST=postgres
+      - DB_HOST=cognee-postgres
       - DB_PORT=5432
       - DB_NAME=cognee_db
       - DB_USERNAME=cognee
       - DB_PASSWORD=${COGNEE_DB_PASSWORD}
       - VECTOR_DB_PROVIDER=pgvector
-      - VECTOR_DB_HOST=postgres
+      - VECTOR_DB_HOST=cognee-postgres
       - VECTOR_DB_PORT=5432
       - VECTOR_DB_NAME=cognee_db
       - GRAPH_DATABASE_PROVIDER=kuzu
@@ -86,7 +86,11 @@ services:
       - API_URL=http://cognee-backend:8000
       - API_TOKEN=${COGNEE_MCP_API_TOKEN}
 
-  postgres:
+  # NOT named `postgres`: Coolify's own database container, coolify-db,
+  # publishes the alias `postgres` on the shared `coolify` network that this
+  # stack joins. A service named `postgres` here resolves to THAT server and
+  # fails authentication for user `cognee`.
+  cognee-postgres:
     image: pgvector/pgvector:pg17
     restart: always
     environment:

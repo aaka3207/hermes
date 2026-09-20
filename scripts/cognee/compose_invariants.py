@@ -18,7 +18,7 @@ dependencies, in CI or on a bare host, and the checks are all lexical.
 """
 import re
 
-REQUIRED_SERVICES = ("cognee-backend", "cognee-mcp", "postgres")
+REQUIRED_SERVICES = ("cognee-backend", "cognee-mcp", "cognee-postgres")
 
 PINNED = {
     "cognee/cognee": "1.6.0",
@@ -63,7 +63,9 @@ def check_compose(text):
         if not re.search(r"^\s{2}%s:\s*$" % re.escape(name), text, re.M):
             violations.append(
                 "missing or renamed service %r -- compose service names are the "
-                "DNS aliases metamcp and Hermes resolve" % name)
+                "DNS aliases metamcp and Hermes resolve, and `cognee-postgres` "
+                "must not be shortened to `postgres`, which collides with "
+                "coolify-db on the shared network" % name)
 
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
