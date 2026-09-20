@@ -280,6 +280,31 @@ healthy. Fixed with `MCP_ALLOWED_HOSTS`, keeping the guard on rather than
 setting `MCP_DISABLE_DNS_REBINDING_PROTECTION=true`. **The `:*` port glob
 suffix is required on every entry** or the entry silently matches nothing.
 
+**A cold backend answers the first `remember` with 409.** The first request
+into a fresh backend process triggers a preflight that embeds a test string
+with a hard 30s timeout (`test_embedding_connection`,
+`cognee/infrastructure/llm/utils.py`). That preflight stalls past its limit on
+a cold process -- `huggingface_hub` rejects the model name
+`openrouter/openai/text-embedding-3-small` as a repo id along the way -- and
+the request comes back **409**, which reads like a duplicate-content conflict
+and is nothing of the kind. Measured immediately afterwards, on the same
+container: embeddings return 1536 dimensions in **0.2-0.4s**, and a real
+`POST /api/v1/remember` completes in **6.7s**.
+
+Consequences worth knowing before a long seed:
+
+* **Warm the backend before seeding.** One throwaway `remember` into a scratch
+  dataset is enough. Do not aim the warm-up at `shared`; it writes a real
+  memory.
+* The seeder classifies 409 as a 4xx `failed` -- correctly, since a 409 is a
+  definite refusal. Failed records are **not** checkpointed, so simply
+  re-running the seeder retries them. Record 0 was lost to this on the first
+  attempt and succeeded on the re-run.
+* `COGNEE_SKIP_CONNECTION_TEST=true` (the error message suggests it) disables
+  the **entire** preflight, LLM checks included. It is not set here: the
+  preflight is worth keeping, the stall is once per process, and warming up
+  costs one request.
+
 **The stale Mnemosyne copy.** The live store is
 **`/opt/data/mnemosyne/data/mnemosyne.db` on the server** — 3 / 252 / 1216
 rows, matching `mnemosyne_stats`. That is the one path; use it everywhere,
