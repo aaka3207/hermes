@@ -39,6 +39,7 @@ services:
       - CORS_ALLOWED_ORIGINS=https://cognee.aakashe.org
       - DB_PROVIDER=postgres
       - VECTOR_DB_PROVIDER=pgvector
+      - VECTOR_DB_USERNAME=cognee
       - GRAPH_DATABASE_PROVIDER=kuzu
       - EMBEDDING_DIMENSIONS=1536
       - EMBEDDING_MODEL=openrouter/openai/text-embedding-3-small

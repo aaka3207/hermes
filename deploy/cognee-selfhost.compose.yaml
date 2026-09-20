@@ -50,6 +50,12 @@ services:
       - VECTOR_DB_HOST=cognee-postgres
       - VECTOR_DB_PORT=5432
       - VECTOR_DB_NAME=cognee_db
+      # pgvector does NOT inherit the relational DB_* credentials. Cognee
+      # validates these four separately and raises
+      # `OSError: Missing required pgvector credentials.` at startup if the
+      # username or password is absent, even though it is the same server.
+      - VECTOR_DB_USERNAME=cognee
+      - VECTOR_DB_PASSWORD=${COGNEE_DB_PASSWORD}
       - GRAPH_DATABASE_PROVIDER=kuzu
 
       # --- models: both halves via OpenRouter, Cognee's `custom` provider ---

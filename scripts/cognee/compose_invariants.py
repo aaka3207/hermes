@@ -32,6 +32,8 @@ FLOATING_TAGS = ("latest", "main", "dev-canary", "buildcache")
 # here (secrets, per-deploy values like CORS origin) is intentionally out of
 # scope -- this is for settings a future edit could silently drift.
 REQUIRED_SETTINGS = {
+    # pgvector is validated separately from DB_*; missing creds crash at boot.
+    "VECTOR_DB_USERNAME": "cognee",
     "EMBEDDING_DIMENSIONS": "1536",
     "EMBEDDING_MODEL": "openrouter/openai/text-embedding-3-small",
     "LLM_MODEL": "openrouter/deepseek/deepseek-v4-flash",
