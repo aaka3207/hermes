@@ -17,13 +17,15 @@ services:
     expose:
       - "8000"
     environment:
-      # Coolify magic variable: publishes this service's port 8000 at the
-      # given domain and generates the Traefik router. The PORT-LESS form
-      # below is the one Coolify actually builds the router from -- setting
-      # only the _8000 form leaves the router on a generated sslip.io host.
-      # Bare domain, no scheme (matches the existing metamcp service).
-      - SERVICE_FQDN_COGNEE_BACKEND=cognee.aakashe.org
-      - SERVICE_FQDN_COGNEE_BACKEND_8000=cognee.aakashe.org
+      # Coolify magic variable. The `_8000` name suffix is what tells the
+      # proxy to route to container port 8000; the variable's VALUE slot is
+      # for a URL path, NOT a domain, so it is deliberately left empty here.
+      # The domain itself is not set from the compose at all -- it lives in
+      # the service's Domains field in the Coolify UI, and must carry the
+      # internal port: `https://cognee.aakashe.org:8000`. Same shape as the
+      # existing metamcp service, whose stored domain is
+      # `http://metamcp.aakashe.org:12008`.
+      - SERVICE_FQDN_COGNEE_BACKEND_8000
       - ENV=prod
       - DEBUG=false
       - LOG_LEVEL=INFO
