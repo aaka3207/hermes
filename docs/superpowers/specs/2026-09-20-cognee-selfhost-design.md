@@ -310,15 +310,48 @@ tunnel dependency above before accepting it as permanent.
 Datasets are the isolation boundary, and are the Cognee analogue of Mnemosyne's two
 banks — without the shared-file fragility.
 
-| Dataset | Written by | Purpose |
-|---|---|---|
-| `hermes` | Hermes personal profile | personal memory; the seed target |
-| `shared` | Hermes + Claude Desktop | the explicit cross-agent surface |
-| `dinefile` | — | **untouched; stays on Cognee Cloud** |
+**REVISED 2026-09-20, after reading the shipped plugin.** The original split below
+does not work, and the reason is not visible from Cognee's documentation.
 
-Cognee supports per-dataset ACLs (`read` / `write` / `delete` / `share`) and recall
-accepts a list of datasets, so this can grow into finer-grained sharing later. It is
-not needed for the evaluation.
+`cognee_integration_hermes/provider.py` (`_recall_scope_params`) always passes
+`[self._dataset]` — a single-element list. **Hermes reads exactly one dataset at a
+time.** Cognee itself searches every readable dataset when `datasets` is omitted, and
+`cognee-mcp`'s `recall` exposes `datasets` as optional, so Claude Code *can* span
+both; Hermes cannot. The plugin never sends `node_set`, `labels` or
+`external_metadata` either, so Hermes writes cannot be tagged natively.
+
+Therefore the portable layer must BE the dataset Hermes defaults to:
+
+| Dataset | Read by | Written by | Purpose |
+|---|---|---|---|
+| `shared` | Hermes (default), Claude Code | both | **the portable layer**: durable facts, preferences, relationships. The seed target. |
+| `hermes` | Hermes only when switched into | Hermes | optional quarantine for noisy per-project work, via `cognee_switch_dataset` |
+| `dinefile` | — | — | **untouched; stays on Cognee Cloud** |
+
+Session and permanent memory are separated *inside* a dataset, so one shared dataset
+does not mean session chatter contaminates durable facts. The plugin's own default
+(`agent_sessions`, one dataset for everything) relies on exactly this.
+
+### 7a. Attribution
+
+One shared dataset means Hermes will recall things Claude Code wrote and vice versa,
+so every memory must say who formed it — otherwise an agent treats another agent's
+context as its own.
+
+Native tagging is unavailable for runtime writes (the plugin sends no `node_set`), so
+attribution is **a convention in the memory text**, enforced by prompt instruction:
+
+    [hermes] <memory>
+    [claude-code] <memory>
+    [mnemosyne] <memory>      # seeded history
+
+Where we control the payload — the seeder — we ALSO set `node_set`, which the backend
+accepts on `POST /api/v1/remember` and which recall can filter through `nodeName`.
+That gives a machine-queryable origin for seeded rows without depending on the text
+convention.
+
+Cognee supports per-dataset ACLs (`read` / `write` / `delete` / `share`), so this can
+grow into finer-grained sharing later. Not needed for the evaluation.
 
 ---
 
