@@ -16,26 +16,27 @@ services:
         condition: service_healthy
     expose:
       - "8000"
-    # Hermes' cognee plugin talks to this container DIRECTLY, not through the
-    # public URL. It must, for two independent reasons:
+    # Hermes' cognee plugin talks to this container DIRECTLY, never through the
+    # public URL, for two independent reasons.
     #
-    #   1. The plugin makes its calls with `urllib.request`
-    #      (cognee_integration_hermes/http_backend.py), which sends
-    #      `User-Agent: Python-urllib/<ver>`. Cloudflare blocks that UA at the
-    #      edge -- the request never reaches this origin. Symptom: the plugin
-    #      logs "COGNEE_BASE_URL is set to ... but the connection failed" about
-    #      100ms after start, while `curl` to the same URL returns 200, because
-    #      curl sends a UA Cloudflare allows. Verified:
-    #        curl                        .../health -> 200
-    #        curl -A Python-urllib/3.13  .../health -> 403
-    #   2. Cloudflare times the origin out at ~100s. `improve_on_end` runs
-    #      cognify, which routinely exceeds that -- this is the same 524 that
-    #      killed 149 records during the seed.
+    #   1. The plugin calls out with urllib.request
+    #      (cognee_integration_hermes/http_backend.py), whose User-Agent is
+    #      Python-urllib. Cloudflare blocks that UA at the edge, so the request
+    #      never reaches this origin. It fails about 100ms after start with a
+    #      message about the connection failing, which reads like bad
+    #      credentials. Measured, same URL, same second, UA the only difference.
+    #        curl                       .../health gives 200
+    #        curl -A Python-urllib/3.13 .../health gives 403
+    #      curl is therefore NOT a valid probe for this route.
+    #   2. Cloudflare times the origin out at about 100s. improve_on_end runs
+    #      cognify, which routinely exceeds that. Same 524 that killed 149
+    #      records during the seed.
     #
-    # All THREE networks are listed explicitly. Naming any of them replaces the
-    # set Coolify would otherwise inject, so omitting `coolify` here silently
-    # detaches this container from Traefik and takes cognee.aakashe.org down,
-    # and omitting `default` breaks DNS to cognee-postgres.
+    # All THREE networks are listed explicitly. Naming any network on a service
+    # replaces the set Coolify would otherwise inject, so dropping coolify here
+    # silently detaches this container from Traefik and takes
+    # cognee.aakashe.org down, and dropping default breaks DNS to
+    # cognee-postgres.
     networks:
       - default
       - coolify
@@ -186,15 +187,14 @@ volumes:
 
 networks:
   # Coolify's own shared network, where Traefik lives. Declared external
-  # because Coolify creates it; this stack only joins it.
+  # because Coolify creates it. This stack only joins it.
   coolify:
     external: true
-  # The Hermes application's project network. The name is the Hermes app's
-  # Coolify UUID, which is stable for the life of that application but would
-  # change if the application were deleted and recreated -- if Hermes' memory
-  # starts failing to connect right after a Hermes rebuild, re-check this name
-  # with:
-  #   docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' <hermes container>
+  # The Hermes application's project network. The name is that application's
+  # Coolify UUID, stable for the life of the application but different if the
+  # application is ever deleted and recreated. So if Hermes memory starts
+  # failing to connect right after a Hermes rebuild, suspect this name first
+  # and re-read it from the running Hermes container's NetworkSettings.
   hermes:
     external: true
     name: tgg4k0sc8wgocck08cc4s4cg
