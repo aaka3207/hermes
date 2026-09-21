@@ -91,6 +91,59 @@ _IRREVERSIBLE_NOTE = (
 _SERVICE_RE = re.compile(r"^  ([A-Za-z0-9][A-Za-z0-9_.-]*):\s*$")
 _ENV_RE = re.compile(r"^-\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
+# Hermes' cognee plugin uses urllib, whose `Python-urllib/<ver>` User-Agent
+# Cloudflare blocks at the edge, and Cloudflare also times the origin out at
+# ~100s (cognify exceeds that). So Hermes must reach cognee-backend over a
+# shared Docker network instead of the public URL. Naming ANY network on a
+# service replaces the set Coolify injects, which makes the other two
+# load-bearing: without `coolify` Traefik cannot reach this container and the
+# public hostname 404s; without `default` it cannot resolve cognee-postgres.
+BACKEND_NETWORKS = ("default", "coolify", "hermes")
+HERMES_NETWORK_NAME = "tgg4k0sc8wgocck08cc4s4cg"
+
+_NETWORK_CONSEQUENCE = {
+    "default": "cognee-backend can no longer resolve cognee-postgres",
+    "coolify": "Traefik cannot reach cognee-backend and cognee.aakashe.org "
+               "starts returning 404 while the container reports healthy",
+    "hermes": "Hermes' memory provider loses its direct route and falls back "
+              "to the public URL, where Cloudflare 403s its Python-urllib "
+              "User-Agent -- memory fails with 'the connection failed' about "
+              "100ms after start, while curl to the same URL returns 200",
+}
+
+
+def _service_networks(lines):
+    """Map service name -> [network names] for each service's `networks:` list.
+
+    Lexical, like the env scan: `    networks:` inside a service block opens
+    a list, and `      - name` items belong to it until the indentation drops.
+    """
+    by_service = {}
+    current = None
+    in_networks = False
+    for raw in lines:
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        service = _SERVICE_RE.match(line)
+        if service and not line.lstrip().startswith("-"):
+            current = service.group(1)
+            in_networks = False
+            continue
+        if current is None:
+            continue
+        if re.match(r"^    networks:\s*$", line):
+            in_networks = True
+            by_service.setdefault(current, [])
+            continue
+        if in_networks:
+            item = re.match(r"^      -\s*(\S+)\s*$", line)
+            if item:
+                by_service[current].append(item.group(1))
+            else:
+                in_networks = False
+    return by_service
+
 
 def _env_by_service(lines):
     """Map service name -> {ENV_NAME: value} for the first occurrence of each.
@@ -235,6 +288,34 @@ def check_compose(text):
                     "MCP_ALLOWED_HOSTS entry %r does not end in ':*' -- "
                     "without the port glob suffix the entry silently matches "
                     "nothing, so the host it names is still rejected" % entry)
+
+    backend_networks = _service_networks(lines).get("cognee-backend", [])
+    for name in BACKEND_NETWORKS:
+        if name not in backend_networks:
+            violations.append(
+                "service 'cognee-backend' does not join network %r -- %s"
+                % (name, _NETWORK_CONSEQUENCE[name]))
+
+    for name in ("coolify", "hermes"):
+        if not re.search(r"^  %s:\s*$" % re.escape(name), text, re.M):
+            violations.append(
+                "top-level `networks:` does not declare %r -- a network named "
+                "on a service but not declared is created fresh and empty "
+                "instead of joining the existing one, so the containers that "
+                "are actually on it remain unreachable" % name)
+        elif not re.search(r"^  %s:\s*\n(?:\s+.*\n)*?\s+external:\s*true\s*$"
+                           % re.escape(name), text, re.M):
+            violations.append(
+                "network %r must be declared `external: true` -- Coolify and "
+                "the Hermes application own these networks; this stack only "
+                "joins them" % name)
+
+    if not re.search(r"^\s+name:\s*%s\s*$" % re.escape(HERMES_NETWORK_NAME),
+                     text, re.M):
+        violations.append(
+            "the `hermes` network must set `name: %s` -- the Docker network "
+            "is named after the Hermes application's Coolify UUID, not after "
+            "the alias used here" % HERMES_NETWORK_NAME)
 
     return violations
 
