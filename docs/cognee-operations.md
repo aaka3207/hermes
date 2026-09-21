@@ -176,27 +176,53 @@ For **Claude Desktop / Claude Code**:
 | Stack definition | `deploy/cognee-selfhost.compose.yaml` (this repo) | source of truth, pushed to Coolify |
 | Secrets | Coolify service env vars | container-wide |
 | Domains | Coolify UI **Domains** field | per sub-service |
-| Hermes provider | `/opt/data/cognee.json` | **per profile** |
+| Hermes provider | `/opt/data/cognee.json` | **personal profile** |
+| Hermes provider | `/opt/data/profiles/dinefile/cognee.json` | **`dinefile` profile** |
 | Dataset overrides | `dataset-overrides.json` | per profile |
 
-**The trap.** `cognee.json` for the `dinefile` profile works without an
-explicit `api_key` because the plugin falls back to an inherited
-credential that happens to be correct for Cognee Cloud. The personal profile
-points at this self-hosted backend, where that inherited credential is
-meaningless. **The personal profile's `cognee.json` must set `api_key`
-explicitly.** Omit it and you get a 401 that looks like the backend is
-misconfigured, while `dinefile` keeps working and appears to prove the
-opposite.
+`config.py` builds a dict from `COGNEE_*` environment variables, then does
+`config.update({k: v for k, v in file_config.items() if v is not None})`.
+So the per-profile JSON overrides **any** key, including `api_key` — which
+is what keeps the two profiles independent while they share one container.
+
+**The profile selector is `hermes -p <profile>`, not `HOME`.** Both
+gateway run scripts export `HOME=/opt/data`; `gateway-dinefile` differs only
+by `hermes -p dinefile gateway run`. Comparing profiles by varying `HOME`
+reads the personal config twice and shows two identical answers.
+
+**The trap.** `dinefile`'s `cognee.json` has no `api_key`, so it inherits the
+container-wide `COGNEE_API_KEY` — a Cognee **Cloud** key, which is correct
+for it and meaningless against this self-hosted backend. **The personal
+profile's `cognee.json` must set `api_key` explicitly.** Omit it and you get
+a 401 that looks like the backend is misconfigured, while `dinefile` keeps
+working and appears to prove the opposite.
+
+The corollary is a hazard: **do not put `COGNEE_API_KEY` in a `.env`, and do
+not run the `hermes memory setup` wizard here.** The wizard writes secrets to
+`.env`, and neither profile's `.env` currently defines `COGNEE_API_KEY`, so a
+value landing there can shadow the Cloud key `dinefile` depends on. Edit the
+per-profile JSON directly.
+
+There is no `mode` field. `config.py` comments that *"A set `service_url`
+selects remote/cloud mode"* — setting `service_url` is the whole switch, and
+the field is `service_url`, not `base_url`.
 
 Personal profile `/opt/data/cognee.json`:
 
 ```json
 {
-  "base_url": "https://cognee.aakashe.org",
-  "api_key": "<the minted Cognee API key>",
-  "dataset": "shared"
+  "auto_route": true,
+  "dataset": "shared",
+  "improve_on_end": true,
+  "service_url": "https://cognee.aakashe.org",
+  "api_key": "<the minted Cognee API key>"
 }
 ```
+
+Flip the provider in `/opt/data/config.yaml` (`memory.provider: cognee`) and
+add `cognee` to `plugins.enabled`, then restart the personal gateway alone:
+`docker exec <hermes> /command/s6-svc -r /run/service/gateway-default`.
+Never restart `gateway-dinefile` as part of this.
 
 ---
 
