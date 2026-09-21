@@ -224,6 +224,58 @@ add `cognee` to `plugins.enabled`, then restart the personal gateway alone:
 `docker exec <hermes> /command/s6-svc -r /run/service/gateway-default`.
 Never restart `gateway-dinefile` as part of this.
 
+### The `service_url` must be the internal one, not the public one
+
+`service_url` for the personal profile is **`http://cognee-backend:8000`**,
+not `https://cognee.aakashe.org`. Using the public URL fails, and fails in a
+way that looks like a credentials or backend problem:
+
+```
+Memory provider 'cognee' initialize failed: COGNEE_BASE_URL is set to
+'https://cognee.aakashe.org' but the connection failed.
+```
+
+...roughly 100 ms after start, while `curl` against that same URL returns
+200. The cause is neither the URL nor the key. The plugin makes its calls
+with `urllib.request` (`http_backend.py:228`), which sends
+`User-Agent: Python-urllib/<ver>`, and Cloudflare blocks that UA at the edge —
+the request never reaches the origin. The header dict at `http_backend.py:250`
+carries only `Content-Type`, `X-Api-Key` and `Cookie`, so there is **no UA
+override and no env knob**; this cannot be fixed in configuration.
+
+Confirm it in two commands — the only difference is the UA:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n'                        https://cognee.aakashe.org/health   # 200
+curl -s -o /dev/null -w '%{http_code}\n' -A Python-urllib/3.13  https://cognee.aakashe.org/health   # 403
+```
+
+**The wider lesson: `curl` is not a valid probe for this path.** Every
+reachability check for the Hermes→backend route must send the UA the plugin
+actually sends, or it proves nothing.
+
+Going direct also removes Cloudflare's ~100 s origin timeout, which is the
+524 that lost 149 records during the seed and which `improve_on_end`'s
+cognify pass would hit again.
+
+The route is a Docker network shared between the Hermes application and
+`cognee-backend`, declared in `deploy/cognee-selfhost.compose.yaml` and
+enforced by `compose_invariants.py`. If memory starts failing to connect
+immediately after a Hermes rebuild, the likely cause is that the Hermes
+application was recreated and its network UUID changed; re-check with:
+
+```bash
+docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' <hermes container>
+```
+
+and update the `hermes` network's `name:` in the compose. As an immediate
+stopgap the attachment can be restored at runtime, but it is lost on the next
+redeploy, so it is a bridge to a compose fix and not the fix:
+
+```bash
+docker network connect <cognee network> <hermes container>
+```
+
 ---
 
 ## 6. Authentication
