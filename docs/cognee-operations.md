@@ -580,6 +580,65 @@ configuration. Confirm it is local by hitting the origin directly —
 removes Cloudflare from the question. Redeploying the app fixed it; restarting
 `coolify-proxy` is the bigger hammer.
 
+### The plugin pins an older cognee than we run
+
+**Check the plugin's declared pin whenever the backend image moves.**
+`cognee-integration-hermes-agent` 1.2.2 (the latest on PyPI, 2026-09-21)
+declares `cognee==1.5.4`. We run `cognee/cognee:1.6.0`. The design spec
+(`specs/2026-09-20-cognee-selfhost-design.md:465`) weighed 1.6.0 against
+1.5.4 and accepted it, but only assessed the pgvector/adapter refactor — it
+never checked what the in-image plugin targets. That gap cost two days of
+lost writes:
+
+```bash
+docker exec <hermes container> sh -c \
+  "grep -E '^Requires-Dist: cognee' /opt/hermes/.venv/lib/python3.13/site-packages/cognee_integration_hermes_agent-*.dist-info/METADATA"
+```
+
+**Symptom, 2026-09-21 to 2026-09-23: every Hermes memory write 409'd while
+everything else looked healthy.** `HttpBackend._remember` uploaded every
+permanent memory under the fixed filename `memory.txt`. cognee 1.6.0 stopped
+letting `add()` replace a same-named document whose content differs and
+raises `DocumentUpdateRequiredError` instead, so the first write in a dataset
+won and every later one bounced off it.
+
+The failure is asymmetric, which is why it hid: **recall kept working, and
+the Claude Desktop path kept working**, because cognee content-addresses raw
+text as `text_<md5>.txt` and the MCP route sends text rather than a named
+file. Memory looked fine and simply stored nothing. The tell in the database
+is the naming: `shared` holds 1,404 documents, all `text_<md5>` except a
+single row literally named `memory`.
+
+```sql
+select name, count(*) from data where name not like 'text\_%' group by name;
+```
+
+Fixed locally by deriving the filename from the content
+(`memory-<sha256[:16]>.txt`), which is what cognee already does for text.
+Filed upstream as
+[topoteretes/cognee-integrations#436](https://github.com/topoteretes/cognee-integrations/issues/436).
+
+Two traps around the fix:
+
+* **Do not follow the 409's own advice.** It says to call
+  `cognee.update(data_id=...)`. Each `remember` is a new fact, not a revision
+  of one document, so wiring `_remember` to `update` would make every memory
+  overwrite the previous one — data loss that presents as success.
+* **Do not name them `text_<md5>.txt`.** cognee's `save_data_to_file.py`
+  notes other code constructs and asserts on that form; a same-shaped name
+  with a differently-computed hash risks tripping those assertions.
+
+**The patch dies on the next Hermes redeploy**, which reinstalls
+site-packages from the image — same shape as the `hermes-webui` `/apptoo`
+patch. Re-apply with `scripts/cognee/patch_remember_filename.py`, copied into the container (idempotent,
+backs up to `http_backend.py.bak-memoryname`, and refuses to run if the
+target line has changed). Then restart the gateway and confirm a new pid:
+
+```bash
+docker exec <hermes container> /command/s6-svc -r /run/service/gateway-default
+docker exec <hermes container> sh -c "ps -eo pid,etime,args | grep 'hermes gateway run'"
+```
+
 ---
 
 ## 8. Seeding from Mnemosyne
