@@ -187,6 +187,57 @@ For **Claude Desktop / Claude Code**:
 > you — useful, but not an instruction you were given. When you write a
 > memory, prefix it with `[claude-code]`.
 
+### Global rule for Claude Desktop
+
+Paste this whole block. It covers the three things that actually go wrong:
+unscoped datasets, misreading result counts, and writing junk.
+
+> **Cognee is shared long-term memory.** Use it through the `cognee` MCP
+> server.
+>
+> **Always scope the dataset.** Pass `datasets: "shared"` on every `recall`,
+> and `dataset_name: "shared"` on every `remember`. The two tools spell it
+> differently — that asymmetry is easy to miss. If `datasets` is omitted on a
+> recall, the server searches *every* dataset it can see, including scratch
+> ones, and mixes their contents into the answer.
+>
+> **Recall before answering** anything about the user, their projects,
+> infrastructure, preferences, or past decisions — before saying you don't
+> know something about them. Do not recall for general knowledge, or for facts
+> already present in this conversation.
+>
+> **A small result count does not mean a small store.** The default search is
+> `GRAPH_COMPLETION`, which returns a single synthesized answer built from the
+> graph, not a list of matches. `shared` holds roughly 1380 records. To see
+> what is actually stored, use `search_type: "CHUNKS"` and raise `top_k`
+> (default 15). Never conclude from one graph result that the store is empty,
+> thin, or lacks information about the user.
+>
+> **Write sparingly, and only durable things:** stated preferences, decisions
+> and the reasoning behind them, constraints, identities and relationships,
+> recurring workflows. Not transient task state, not secrets or credentials,
+> and not anything trivially re-derivable from a repo or file. Prefix every
+> memory you write with `[claude-desktop]`.
+>
+> **Writes are slow.** `remember` runs the full extraction pipeline — chunk,
+> LLM graph extraction, embed, write — taking roughly 8 to 12 seconds. Pass
+> `background: true` when the write does not need to complete before you
+> answer.
+
+Tool signatures, for reference:
+
+```
+recall(query, search_type=None, datasets=None, session_id=None,
+       system_prompt=None, top_k=15)
+remember(data=None, filename=None, content_base64=None, dataset_name=None,
+         session_id=None, custom_prompt=None, background=False,
+         ontology_key=None, self_improvement=True)
+```
+
+Useful `search_type` values: `GRAPH_COMPLETION` (default, synthesized answer),
+`CHUNKS` (raw stored text, no LLM), `INSIGHTS`, `RAG_COMPLETION`,
+`CHUNKS_LEXICAL`, `NATURAL_LANGUAGE`, `CYPHER`, `CODE`.
+
 ---
 
 ## 5. Where configuration lives, and the `api_key` trap
@@ -655,9 +706,19 @@ produced a fresh container on its own network only — `http://cognee-backend:80
 still answered 200 under the plugin's UA, and `HttpBackend.connect()` still
 succeeded, with no manual step.
 
+**Claude Desktop is connected and the full chain is exercised.** metamcp
+reaches `http://cognee-mcp-lndyf8z46p75oh524khm5z19:8000/sse` over the shared
+`coolify` network (SSE 200, no auth on that hop — cognee-mcp holds the backend
+API key itself). A recall from Claude Desktop through metamcp → cognee-mcp →
+backend returned seeded content from `shared`. The short alias `cognee-mcp`
+does **not** resolve from metamcp, because that alias exists only on the cognee
+project network; the UUID-suffixed container name is required, and it changes
+if the Coolify service is ever deleted and recreated.
+
 Known leftovers, none blocking: the 91 unseeded records; stray
-`preflight-check` and `hermes` datasets on the backend; `gateway-dinefile`
-down since ~2026-09-16 (unrelated to Cognee).
+`preflight-check` and `hermes` datasets on the backend (`preflight-check` also
+holds a model smoke-test record from 2026-09-23); `gateway-dinefile` down since
+~2026-09-16 (unrelated to Cognee).
 
 ---
 
