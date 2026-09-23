@@ -101,6 +101,31 @@ services:
       - EMBEDDING_API_KEY=${OPENROUTER_API_KEY}
       - EMBEDDING_DIMENSIONS=1536
       # EMBEDDING_ENDPOINT is deliberately absent -- see compose_invariants.py.
+
+      # --- contradiction detection (opt-in, off by default upstream) ---
+      # Appended as the LAST cognify task, after add_data_points, so new and
+      # pre-existing facts are both persisted and comparable. It asks an LLM
+      # which fact pairs directly contradict, then writes a `contradicts` edge
+      # carrying both facts, the reason and a confidence. Non-destructive -- it
+      # only adds edges, never rewrites or deletes -- and it swallows its own
+      # errors, so it cannot break ingestion.
+      #
+      # This matters here because two agents write to one dataset on top of
+      # 1380 imported records, so stale and current facts genuinely coexist.
+      # Cross-ingestion detection works because entity ids are deterministic
+      # (`Entity:<name>`), so a re-mentioned entity keeps its original id and
+      # the new fact lands in the same 1-hop neighbourhood as the old one.
+      #
+      # COST: it is an extra LLM pass per ingestion. `remember` already takes
+      # 8-12s; this adds another round trip and more OpenRouter spend.
+      # It is NOT retroactive -- only entities touched by an ingestion are
+      # examined, so existing contradictions surface as those topics are
+      # written to again, not on enabling.
+      - CONTRADICTION_DETECTION=true
+      # Verdicts below this confidence are dropped (upstream default 0.5).
+      - CONTRADICTION_CONFIDENCE_THRESHOLD=0.5
+      # Caps the facts sent to the LLM in one comparison (upstream default 500).
+      - CONTRADICTION_MAX_FACTS=500
     volumes:
       - cognee_system:/cognee-storage/system
       - cognee_data:/cognee-storage/data
