@@ -32,10 +32,19 @@ services:
     #      cognify, which routinely exceeds that. Same 524 that killed 149
     #      records during the seed.
     #
-    # All THREE networks are listed explicitly. Naming any network on a service
-    # replaces the set Coolify would otherwise inject, so dropping coolify here
-    # silently detaches this container from Traefik and takes
-    # cognee.aakashe.org down, and dropping default breaks DNS to
+    # All THREE networks are listed explicitly. Naming networks anywhere in
+    # this file stops Coolify injecting its own set into EVERY service in the
+    # stack, not just the one that names them -- so once this block exists,
+    # every other service below must list its networks too or it silently
+    # loses `coolify`. Measured 2026-09-23: adding this block alone detached
+    # cognee-mcp, cognee-ui and cognee-postgres from `coolify`, and metamcp
+    # (which lives on `coolify`) lost DNS to cognee-mcp entirely --
+    # `getent hosts cognee-mcp` returned nothing and every request failed with
+    # curl exit 6, which reads like the MCP server being down rather than a
+    # networking change.
+    #
+    # Dropping coolify here also detaches this container from Traefik and
+    # takes cognee.aakashe.org down; dropping default breaks DNS to
     # cognee-postgres.
     networks:
       - default
@@ -167,6 +176,17 @@ services:
       - cognee-backend
     expose:
       - "8000"
+    # metamcp runs in a DIFFERENT Coolify application and reaches this
+    # container over `coolify`. Required explicitly -- see the note on
+    # cognee-backend's networks block.
+    #
+    # On `coolify` this container is registered ONLY under its full name,
+    # cognee-mcp-<stack uuid>; the short `cognee-mcp` alias exists only on the
+    # stack's own network. So metamcp's server URL must use the full name, and
+    # that is why MCP_ALLOWED_HOSTS below lists both spellings.
+    networks:
+      - default
+      - coolify
     environment:
       # API mode: forward tool calls to the backend instead of running
       # pipelines locally, so the backend stays the single owner of the stores.
@@ -203,6 +223,11 @@ services:
         condition: service_healthy
     expose:
       - "3000"
+    # Traefik lives on `coolify`; without this the published domain 404s.
+    # Required explicitly -- see the note on cognee-backend's networks block.
+    networks:
+      - default
+      - coolify
     environment:
       - SERVICE_FQDN_COGNEE_UI_3000
       - COGNEE_BACKEND_URL=https://cognee.aakashe.org
@@ -217,6 +242,13 @@ services:
   cognee-postgres:
     image: pgvector/pgvector:pg17
     restart: always
+    # Deliberately NOT on `coolify`: nothing outside this stack may reach the
+    # database, and joining it would put a server named `cognee-postgres`
+    # beside Coolify's own `postgres` alias on a shared network. Declared
+    # explicitly anyway so the set never depends on Coolify's injection --
+    # see the note on cognee-backend's networks block.
+    networks:
+      - default
     environment:
       - POSTGRES_USER=cognee
       - POSTGRES_DB=cognee_db

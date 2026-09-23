@@ -101,10 +101,22 @@ _ENV_RE = re.compile(r"^-\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 BACKEND_NETWORKS = ("default", "coolify", "hermes")
 HERMES_NETWORK_NAME = "tgg4k0sc8wgocck08cc4s4cg"
 
+# Every service needs its own entry, because the moment one service names a
+# network Coolify stops injecting into all of them. cognee-postgres is the
+# one service that must NOT be on `coolify`; that is checked separately.
+REQUIRED_NETWORKS = {
+    "cognee-backend": BACKEND_NETWORKS,
+    "cognee-mcp": ("default", "coolify"),
+    "cognee-ui": ("default", "coolify"),
+    "cognee-postgres": ("default",),
+}
+
 _NETWORK_CONSEQUENCE = {
-    "default": "cognee-backend can no longer resolve cognee-postgres",
-    "coolify": "Traefik cannot reach cognee-backend and cognee.aakashe.org "
-               "starts returning 404 while the container reports healthy",
+    "default": "the service can no longer resolve the rest of the stack by "
+               "its short compose name",
+    "coolify": "Traefik and the other Coolify applications cannot reach it -- "
+               "a published hostname starts returning 404, and metamcp loses "
+               "DNS to cognee-mcp, while the container still reports healthy",
     "hermes": "Hermes' memory provider loses its direct route and falls back "
               "to the public URL, where Cloudflare 403s its Python-urllib "
               "User-Agent -- memory fails with 'the connection failed' about "
@@ -289,12 +301,29 @@ def check_compose(text):
                     "without the port glob suffix the entry silently matches "
                     "nothing, so the host it names is still rejected" % entry)
 
-    backend_networks = _service_networks(lines).get("cognee-backend", [])
-    for name in BACKEND_NETWORKS:
-        if name not in backend_networks:
+    networks_by_service = _service_networks(lines)
+    for service, required in REQUIRED_NETWORKS.items():
+        if service not in networks_by_service:
             violations.append(
-                "service 'cognee-backend' does not join network %r -- %s"
-                % (name, _NETWORK_CONSEQUENCE[name]))
+                "service %r declares no `networks:` -- once ANY service in "
+                "this file names a network, Coolify stops injecting its own "
+                "set into EVERY service in the stack, so this one silently "
+                "loses 'coolify'. Measured 2026-09-23: metamcp lost DNS to "
+                "cognee-mcp entirely, which reads like the MCP server being "
+                "down rather than a networking change." % service)
+            continue
+        joined = networks_by_service[service]
+        for name in required:
+            if name not in joined:
+                violations.append(
+                    "service %r does not join network %r -- %s"
+                    % (service, name, _NETWORK_CONSEQUENCE[name]))
+    if "coolify" in networks_by_service.get("cognee-postgres", []):
+        violations.append(
+            "service 'cognee-postgres' must NOT join 'coolify' -- that network "
+            "is shared with every other Coolify application, and it already "
+            "carries Coolify's own `postgres` alias; the database must stay "
+            "reachable only from inside this stack")
 
     for name in ("coolify", "hermes"):
         if not re.search(r"^  %s:\s*$" % re.escape(name), text, re.M):

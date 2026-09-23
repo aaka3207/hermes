@@ -273,6 +273,43 @@ networks change below:
 docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' <cognee-backend container>
 ```
 
+**Naming a network anywhere disarms Coolify's injection for the whole
+stack.** Coolify normally attaches every service in a Service to the shared
+`coolify` network. The moment *any* service declares a `networks:` key,
+that stops — for **all** of them, not just the one that declared it. On
+2026-09-23 adding the block to `cognee-backend` alone silently dropped
+`cognee-mcp`, `cognee-ui` and `cognee-postgres` off `coolify`. All four
+containers stayed `healthy`, so nothing looked wrong; what broke was
+metamcp, in a different Coolify application, which lost DNS to `cognee-mcp`
+outright (`getent hosts cognee-mcp` empty, every request curl exit 6). It
+reads as "the MCP server is down", not as a networking change. Every
+service therefore declares its networks explicitly, and
+`compose_invariants.py` fails the compose if one does not.
+
+Two details that follow from this:
+
+* **On `coolify`, a container is registered only under its full name** —
+  `cognee-mcp-<stack uuid>` — never the short `cognee-mcp` alias, which
+  exists only on the stack's own network. metamcp's server URL must use the
+  full name. That is why `MCP_ALLOWED_HOSTS` lists both spellings.
+* **`cognee-postgres` must stay off `coolify`.** That network is shared with
+  every other Coolify application and already carries Coolify's own
+  `postgres` alias. The checker rejects it joining.
+
+Check all four at once:
+
+```bash
+for c in $(docker ps --filter name=<stack uuid> -q); do \
+  docker inspect $c --format '{{.Config.Image}} | {{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'; done
+```
+
+**`cognee-ui` can come up `Created` but never started.** Its
+`depends_on: service_healthy` on the backend, which needs ~60s to pass its
+healthcheck, sometimes leaves the UI created-but-not-started after a deploy,
+with empty logs and no error. `cognee-ui.aakashe.org` returns 404 (no
+Traefik route) until you `docker start` it. Check for it after every deploy
+with `docker ps -a --filter status=created`.
+
 `config.py` builds a dict from `COGNEE_*` environment variables, then does
 `config.update({k: v for k, v in file_config.items() if v is not None})`.
 So the per-profile JSON overrides **any** key, including `api_key` — which
