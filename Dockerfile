@@ -806,9 +806,11 @@ RUN printf '%s\n' \
 # container start instead. Logic, exit codes and rationale live in
 # docker/lcm-588-mitigation.py; tests in tests/test_lcm_588_mitigation.py.
 COPY docker/lcm-588-mitigation.py docker/entrypoint-lcm-guard.sh \
-     docker/cognee-cloud-smoke.py /opt/hermes/docker/
+     docker/cognee-cloud-smoke.py docker/cognee-remember-filename.py \
+     /opt/hermes/docker/
 RUN chmod +x /opt/hermes/docker/lcm-588-mitigation.py \
-             /opt/hermes/docker/entrypoint-lcm-guard.sh
+             /opt/hermes/docker/entrypoint-lcm-guard.sh \
+             /opt/hermes/docker/cognee-remember-filename.py
 
 # Smoke-check the copied script so a broken edit fails the BUILD rather than a
 # 3am container start: it must compile, and the absent-plugin branch must exit
@@ -894,7 +896,32 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
         --exclude-newer-package "cognee=2026-09-05T00:00:00Z" \
         "cognee-integration-hermes-agent @ git+https://github.com/topoteretes/cognee-integrations.git@9103726f69cd198eefc7aee720b509df5e47f906#subdirectory=integrations/hermes-agent" \
         "packaging==26.0" && \
-    /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py
+    /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py && \
+    /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-remember-filename.py
+
+# The line above patches the plugin just installed, in the SAME layer.
+#
+# _remember uploads every memory as a file named `memory.txt`. That is fine on
+# the cognee==1.5.4 this package pins, where add() silently replaced a
+# same-named document -- and fatal against the self-hosted cognee 1.6.0 backend
+# (deploy/cognee-selfhost.compose.yaml), which raises
+# DocumentUpdateRequiredError (409) instead. The first remember in a dataset
+# then wins and every later one fails, while recall and the Claude Desktop MCP
+# path keep working, so memory looks healthy and stores nothing. Measured: two
+# days of silent write loss, 2026-09-21 to 2026-09-23.
+#
+# Chained into the install's own RUN deliberately: as a separate layer it could
+# be cached while the install layer beneath it rebuilt, leaving a fresh
+# unpatched plugin under a cached "already patched" result.
+#
+# The script is idempotent, exits 0 when upstream fixes this, and exits 1 --
+# failing the build -- if the anchor moves while the fixed name remains. A loud
+# failure here is much cheaper than another silent write outage.
+#
+# Upstream: topoteretes/cognee-integrations#436. Delete this note,
+# docker/cognee-remember-filename.py and
+# tests/test_cognee_remember_filename.py once the pin above moves to a release
+# carrying the fix.
 
 # Wrap the stock entrypoint so the mitigation runs before anything opens the
 # LCM database. Declaring ENTRYPOINT resets the base image's CMD, so re-declare

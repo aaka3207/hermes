@@ -628,15 +628,30 @@ Two traps around the fix:
   notes other code constructs and asserts on that form; a same-shaped name
   with a differently-computed hash risks tripping those assertions.
 
-**The patch dies on the next Hermes redeploy**, which reinstalls
-site-packages from the image — same shape as the `hermes-webui` `/apptoo`
-patch. Re-apply with `scripts/cognee/patch_remember_filename.py`, copied into the container (idempotent,
-backs up to `http_backend.py.bak-memoryname`, and refuses to run if the
-target line has changed). Then restart the gateway and confirm a new pid:
+**The fix is baked into the image, so a redeploy no longer loses it.**
+`docker/cognee-remember-filename.py` is applied in the same `RUN` as the
+plugin install (see the Dockerfile note next to the
+`cognee-integration-hermes-agent` pin) — chained rather than a separate
+layer, so a rebuilt install layer cannot sit under a cached "already
+patched". It follows the `lcm-588-mitigation.py` pattern: idempotent, atomic
+write, `py_compile` check with revert, exit 0 when upstream fixes this, and
+exit 1 — **failing the build** — if the anchor moves while the fixed name
+remains. `tests/test_cognee_remember_filename.py` covers all of that,
+including a control proving unpatched source really does collide. Validated
+against the exact pinned upstream commit, not just a fixture.
+
+`/opt/hermes` is image content — only `/opt/data` is a volume — so nothing
+needs re-asserting at boot, unlike the LCM mitigation.
+
+**If you ever do hand-patch site-packages, restart `dashboard`, not just
+`gateway-default`.** The dashboard process is what serves an interactive
+Hermes session, and a long-running one holds the old module in memory: a
+patch plus a gateway restart produced a byte-identical 409 and looked like
+the patch had failed. Restart both and confirm new pids:
 
 ```bash
-docker exec <hermes container> /command/s6-svc -r /run/service/gateway-default
-docker exec <hermes container> sh -c "ps -eo pid,etime,args | grep 'hermes gateway run'"
+docker exec <hermes container> sh -c "/command/s6-svc -r /run/service/dashboard; /command/s6-svc -r /run/service/gateway-default"
+docker exec <hermes container> sh -c "ps -eo pid,etime,args | grep -E 'hermes (dashboard|gateway run)' | grep -v grep"
 ```
 
 ---
