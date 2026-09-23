@@ -1,0 +1,281 @@
+# Self-hosted Cognee for the personal Hermes profile and Claude Desktop.
+# Spec: hermes repo, docs/superpowers/specs/2026-09-20-cognee-selfhost-design.md
+#
+# Two clients share the STORE, not the transport:
+#   Hermes         -> cognee-backend directly (in-process plugin, X-Api-Key)
+#   Claude Desktop -> metamcp -> cognee-mcp -> cognee-backend
+#
+# NO `ports:` ANYWHERE. Host :8000 is the Coolify dashboard. Coolify routes the
+# backend's published domain through Traefik; everything else stays internal.
+services:
+  cognee-backend:
+    image: cognee/cognee:1.6.0
+    restart: always
+    depends_on:
+      cognee-postgres:
+        condition: service_healthy
+    expose:
+      - "8000"
+    # Hermes' cognee plugin talks to this container DIRECTLY, never through the
+    # public URL, for two independent reasons.
+    #
+    #   1. The plugin calls out with urllib.request
+    #      (cognee_integration_hermes/http_backend.py), whose User-Agent is
+    #      Python-urllib. Cloudflare blocks that UA at the edge, so the request
+    #      never reaches this origin. It fails about 100ms after start with a
+    #      message about the connection failing, which reads like bad
+    #      credentials. Measured, same URL, same second, UA the only difference.
+    #        curl                       .../health gives 200
+    #        curl -A Python-urllib/3.13 .../health gives 403
+    #      curl is therefore NOT a valid probe for this route.
+    #   2. Cloudflare times the origin out at about 100s. improve_on_end runs
+    #      cognify, which routinely exceeds that. Same 524 that killed 149
+    #      records during the seed.
+    #
+    # All THREE networks are listed explicitly. Naming networks anywhere in
+    # this file stops Coolify injecting its own set into EVERY service in the
+    # stack, not just the one that names them -- so once this block exists,
+    # every other service below must list its networks too or it silently
+    # loses `coolify`. Measured 2026-09-23: adding this block alone detached
+    # cognee-mcp, cognee-ui and cognee-postgres from `coolify`, and metamcp
+    # (which lives on `coolify`) lost DNS to cognee-mcp entirely --
+    # `getent hosts cognee-mcp` returned nothing and every request failed with
+    # curl exit 6, which reads like the MCP server being down rather than a
+    # networking change.
+    #
+    # Dropping coolify here also detaches this container from Traefik and
+    # takes cognee.aakashe.org down; dropping default breaks DNS to
+    # cognee-postgres.
+    networks:
+      - default
+      - coolify
+      - hermes
+    environment:
+      # Coolify magic variable. The `_8000` name suffix is what tells the
+      # proxy to route to container port 8000; the variable's VALUE slot is
+      # for a URL path, NOT a domain, so it is deliberately left empty here.
+      # The domain itself is not set from the compose at all -- it lives in
+      # the service's Domains field in the Coolify UI, where it must be
+      # exactly:  http://cognee.aakashe.org:8000
+      # Two details, both load-bearing, both matching every working service
+      # in this estate (http://metamcp.aakashe.org:12008,
+      # http://paperclip.aakashe.org:3100):
+      #   * the INTERNAL container port is part of the value;
+      #   * the scheme is http, NOT https. TLS terminates at Cloudflare and
+      #     the origin is reached over plain HTTP, so an https value makes
+      #     Traefik redirect to https forever -- curl reports
+      #     "Maximum (50) redirects followed" and the service looks down.
+      # CORS_ALLOWED_ORIGINS below stays https: that is the browser-facing
+      # origin, which is a different thing from the origin-side scheme.
+      - SERVICE_FQDN_COGNEE_BACKEND_8000
+      - ENV=prod
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+
+      # --- security: every one of these defaults to something unsafe ---
+      - ENABLE_BACKEND_ACCESS_CONTROL=true
+      - FASTAPI_USERS_JWT_SECRET=${COGNEE_JWT_SECRET}
+      - CORS_ALLOWED_ORIGINS=${COGNEE_CORS_ORIGINS}
+      # Read ONLY on first boot. Changing these later does not update the
+      # already-created superuser.
+      - DEFAULT_USER_EMAIL=${COGNEE_DEFAULT_USER_EMAIL}
+      - DEFAULT_USER_PASSWORD=${COGNEE_DEFAULT_USER_PASSWORD}
+
+      # --- stores: postgres+pgvector relational/vector, embedded kuzu graph ---
+      - DB_PROVIDER=postgres
+      - DB_HOST=cognee-postgres
+      - DB_PORT=5432
+      - DB_NAME=cognee_db
+      - DB_USERNAME=cognee
+      - DB_PASSWORD=${COGNEE_DB_PASSWORD}
+      - VECTOR_DB_PROVIDER=pgvector
+      - VECTOR_DB_HOST=cognee-postgres
+      - VECTOR_DB_PORT=5432
+      - VECTOR_DB_NAME=cognee_db
+      # pgvector does NOT inherit the relational DB_* credentials. Cognee
+      # validates these four separately and raises
+      # `OSError: Missing required pgvector credentials.` at startup if the
+      # username or password is absent, even though it is the same server.
+      - VECTOR_DB_USERNAME=cognee
+      - VECTOR_DB_PASSWORD=${COGNEE_DB_PASSWORD}
+      - GRAPH_DATABASE_PROVIDER=kuzu
+
+      # --- models: both halves via OpenRouter, Cognee's `custom` provider ---
+      - LLM_PROVIDER=custom
+      - LLM_MODEL=openrouter/openai/gpt-oss-120b:nitro
+      - LLM_ENDPOINT=https://openrouter.ai/api/v1
+      - LLM_API_KEY=${OPENROUTER_API_KEY}
+      - EMBEDDING_PROVIDER=custom
+      - EMBEDDING_MODEL=openrouter/openai/text-embedding-3-small
+      - EMBEDDING_API_KEY=${OPENROUTER_API_KEY}
+      - EMBEDDING_DIMENSIONS=1536
+      # EMBEDDING_ENDPOINT is deliberately absent -- see compose_invariants.py.
+
+      # --- contradiction detection (opt-in, off by default upstream) ---
+      # Appended as the LAST cognify task, after add_data_points, so new and
+      # pre-existing facts are both persisted and comparable. It asks an LLM
+      # which fact pairs directly contradict, then writes a `contradicts` edge
+      # carrying both facts, the reason and a confidence. Non-destructive -- it
+      # only adds edges, never rewrites or deletes -- and it swallows its own
+      # errors, so it cannot break ingestion.
+      #
+      # This matters here because two agents write to one dataset on top of
+      # 1380 imported records, so stale and current facts genuinely coexist.
+      # Cross-ingestion detection works because entity ids are deterministic
+      # (`Entity:<name>`), so a re-mentioned entity keeps its original id and
+      # the new fact lands in the same 1-hop neighbourhood as the old one.
+      #
+      # COST: it is an extra LLM pass per ingestion. `remember` already takes
+      # 8-12s; this adds another round trip and more OpenRouter spend.
+      # It is NOT retroactive -- only entities touched by an ingestion are
+      # examined, so existing contradictions surface as those topics are
+      # written to again, not on enabling.
+      - CONTRADICTION_DETECTION=true
+      # Verdicts below this confidence are dropped (upstream default 0.5).
+      - CONTRADICTION_CONFIDENCE_THRESHOLD=0.5
+      # Caps the facts sent to the LLM in one comparison (upstream default 500).
+      - CONTRADICTION_MAX_FACTS=500
+
+      # --- provenance ledger (opt-in, off by default upstream) ---
+      # Spliced in right after add_data_points, before contradiction detection.
+      # For every item an ingestion produced it appends document -> chunk ->
+      # entity -> relationship lineage to the relational `provenance_entries`
+      # table, all entries for one invocation in ONE chained transaction.
+      # Same safety contract as detect_contradictions -- returns its input
+      # unchanged and swallows its own errors, so it cannot break ingestion --
+      # and unlike that pass it makes NO LLM call, so the cost is extra rows
+      # and writes, not tokens or latency.
+      #
+      # Why it earns its place here: two agents write to one dataset, and the
+      # only attribution otherwise is an advisory "[agent]" text prefix that
+      # nothing enforces and a forgetful agent silently omits. The ledger is
+      # store-level, so a fact can be traced back to the ingestion and document
+      # that produced it even when the prefix is missing. It is lineage, not
+      # authorship -- it does not record WHICH agent called remember().
+      #
+      # Ledger keys are prefixed with the dataset id, because cognee entity ids
+      # are globally deterministic name-derived uuid5s; without that prefix two
+      # datasets naming the same entity would share and cross-overwrite one
+      # version chain. Anything reading the ledger must join on the same
+      # prefixed key.
+      - PROVENANCE_TRACKING=true
+    volumes:
+      - cognee_system:/cognee-storage/system
+      - cognee_data:/cognee-storage/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  cognee-mcp:
+    image: cognee/cognee-mcp:main-bbec4a2
+    restart: always
+    depends_on:
+      - cognee-backend
+    expose:
+      - "8000"
+    # metamcp runs in a DIFFERENT Coolify application and reaches this
+    # container over `coolify`. Required explicitly -- see the note on
+    # cognee-backend's networks block.
+    #
+    # On `coolify` this container is registered ONLY under its full name,
+    # cognee-mcp-<stack uuid>; the short `cognee-mcp` alias exists only on the
+    # stack's own network. So metamcp's server URL must use the full name, and
+    # that is why MCP_ALLOWED_HOSTS below lists both spellings.
+    networks:
+      - default
+      - coolify
+    environment:
+      # API mode: forward tool calls to the backend instead of running
+      # pipelines locally, so the backend stays the single owner of the stores.
+      - TRANSPORT_MODE=sse
+      - API_URL=http://cognee-backend:8000
+      - API_TOKEN=${COGNEE_MCP_API_TOKEN}
+      # API_TOKEN defaults to a Bearer JWT for self-hosted backends. A JWT
+      # EXPIRES, which would break Claude Desktop silently weeks later with a
+      # 401 that looks like a config error. A Cognee API key does not expire,
+      # so force the x-api-key scheme and put an API key in the token slot.
+      - COGNEE_API_AUTH_SCHEME=x-api-key
+      # The SSE transport validates the Host header against a loopback-only
+      # allowlist by default, so a request from metamcp -- whose Host is this
+      # container's DNS name -- is rejected before it reaches a tool. Name the
+      # hosts that may reach it instead of setting
+      # MCP_DISABLE_DNS_REBINDING_PROTECTION=true: the guard stays on, and the
+      # ":*" port glob suffix is REQUIRED on every entry or the entry silently
+      # matches nothing.
+      - MCP_ALLOWED_HOSTS=cognee-mcp:*,cognee-mcp-lndyf8z46p75oh524khm5z19:*,cognee-mcp.aakashe.org:*
+
+  # Cognee's web UI. The browser talks to the BACKEND directly (not through
+  # this container), so COGNEE_BACKEND_URL must be the backend's public
+  # address as the browser sees it, and this UI's own origin must appear in
+  # the backend's CORS_ALLOWED_ORIGINS above -- otherwise every call from the
+  # page is blocked by the browser and the UI looks broken while the backend
+  # logs nothing.
+  # Domains field in Coolify, same http+port shape as the backend:
+  #   http://cognee-ui.aakashe.org:3000
+  cognee-ui:
+    image: cognee/cognee-ui:1.6.0
+    restart: always
+    depends_on:
+      cognee-backend:
+        condition: service_healthy
+    expose:
+      - "3000"
+    # Traefik lives on `coolify`; without this the published domain 404s.
+    # Required explicitly -- see the note on cognee-backend's networks block.
+    networks:
+      - default
+      - coolify
+    environment:
+      - SERVICE_FQDN_COGNEE_UI_3000
+      - COGNEE_BACKEND_URL=https://cognee.aakashe.org
+      # The UI's server-side routes fall back to a default-user login when the
+      # browser sent no credentials; must match the backend's value.
+      - DEFAULT_USER_PASSWORD=${COGNEE_DEFAULT_USER_PASSWORD}
+
+  # NOT named `postgres`: Coolify's own database container, coolify-db,
+  # publishes the alias `postgres` on the shared `coolify` network that this
+  # stack joins. A service named `postgres` here resolves to THAT server and
+  # fails authentication for user `cognee`.
+  cognee-postgres:
+    image: pgvector/pgvector:pg17
+    restart: always
+    # Deliberately NOT on `coolify`: nothing outside this stack may reach the
+    # database, and joining it would put a server named `cognee-postgres`
+    # beside Coolify's own `postgres` alias on a shared network. Declared
+    # explicitly anyway so the set never depends on Coolify's injection --
+    # see the note on cognee-backend's networks block.
+    networks:
+      - default
+    environment:
+      - POSTGRES_USER=cognee
+      - POSTGRES_DB=cognee_db
+      - POSTGRES_PASSWORD=${COGNEE_DB_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cognee -d cognee_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  cognee_system:
+  cognee_data:
+  pg_data:
+
+networks:
+  # Coolify's own shared network, where Traefik lives. Declared external
+  # because Coolify creates it. This stack only joins it.
+  coolify:
+    external: true
+  # The Hermes application's project network. The name is that application's
+  # Coolify UUID, stable for the life of the application but different if the
+  # application is ever deleted and recreated. So if Hermes memory starts
+  # failing to connect right after a Hermes rebuild, suspect this name first
+  # and re-read it from the running Hermes container's NetworkSettings.
+  hermes:
+    external: true
+    name: tgg4k0sc8wgocck08cc4s4cg
