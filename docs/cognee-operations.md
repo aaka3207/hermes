@@ -288,10 +288,13 @@ service therefore declares its networks explicitly, and
 
 Two details that follow from this:
 
-* **On `coolify`, a container is registered only under its full name** —
-  `cognee-mcp-<stack uuid>` — never the short `cognee-mcp` alias, which
-  exists only on the stack's own network. metamcp's server URL must use the
-  full name. That is why `MCP_ALLOWED_HOSTS` lists both spellings.
+* **A network joined by hand resolves differently from one declared in
+  compose.** `docker network connect` adds no service alias, so only the full
+  container name `cognee-mcp-<stack uuid>` resolves; a compose-declared
+  membership also publishes the short `cognee-mcp` alias on that network.
+  Both spellings work in the deployed state, and `MCP_ALLOWED_HOSTS` lists
+  both so either route is accepted. Worth knowing when a hand-patched
+  container behaves differently from the same container after a real deploy.
 * **`cognee-postgres` must stay off `coolify`.** That network is shared with
   every other Coolify application and already carries Coolify's own
   `postgres` alias. The checker rejects it joining.
