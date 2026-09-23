@@ -126,6 +126,30 @@ services:
       - CONTRADICTION_CONFIDENCE_THRESHOLD=0.5
       # Caps the facts sent to the LLM in one comparison (upstream default 500).
       - CONTRADICTION_MAX_FACTS=500
+
+      # --- provenance ledger (opt-in, off by default upstream) ---
+      # Spliced in right after add_data_points, before contradiction detection.
+      # For every item an ingestion produced it appends document -> chunk ->
+      # entity -> relationship lineage to the relational `provenance_entries`
+      # table, all entries for one invocation in ONE chained transaction.
+      # Same safety contract as detect_contradictions -- returns its input
+      # unchanged and swallows its own errors, so it cannot break ingestion --
+      # and unlike that pass it makes NO LLM call, so the cost is extra rows
+      # and writes, not tokens or latency.
+      #
+      # Why it earns its place here: two agents write to one dataset, and the
+      # only attribution otherwise is an advisory "[agent]" text prefix that
+      # nothing enforces and a forgetful agent silently omits. The ledger is
+      # store-level, so a fact can be traced back to the ingestion and document
+      # that produced it even when the prefix is missing. It is lineage, not
+      # authorship -- it does not record WHICH agent called remember().
+      #
+      # Ledger keys are prefixed with the dataset id, because cognee entity ids
+      # are globally deterministic name-derived uuid5s; without that prefix two
+      # datasets naming the same entity would share and cross-overwrite one
+      # version chain. Anything reading the ledger must join on the same
+      # prefixed key.
+      - PROVENANCE_TRACKING=true
     volumes:
       - cognee_system:/cognee-storage/system
       - cognee_data:/cognee-storage/data
