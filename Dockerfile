@@ -896,6 +896,47 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
         "packaging==26.0" && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py
 
+# --------------------------------------------------------------------- rtk
+# RTK — rewrites the agent's terminal commands into compact equivalents
+# (`cat x` -> `rtk read x`, `git status` -> `rtk git status`) so each tool call
+# returns far fewer bytes for the model to read. Two artifacts: the pinned Rust
+# binary on PATH, and a thin Python adapter registered as a `pre_tool_call`
+# hook that shells out to `rtk rewrite` and mutates the terminal tool's
+# `command` in place. Every rewrite decision stays in the binary.
+#
+# Both are installed into the IMAGE, not the runtime volume, even though
+# upstream's documented `rtk init --agent hermes` targets $HERMES_HOME. That
+# command writes the plugin under $HERMES_HOME/plugins and patches
+# $HERMES_HOME/config.yaml — here $HERMES_HOME is /opt/data, a volume the build
+# cannot see and which each profile owns its own copy of. docker/rtk-install.sh
+# runs the same installer against a throwaway home and keeps only the plugin,
+# relocating it to the bundled plugin dir that hermes_cli/plugins.py scans
+# first. One copy then serves both the default and dinefile gateways, nothing
+# mutates the volume at boot, and the plugin can never drift from the binary
+# it delegates to.
+#
+# STILL NEEDS ONE MANUAL STEP. `plugins.enabled` in each profile's config.yaml
+# is an opt-in allow-list, and bundled auto-load applies only to backend and
+# platform plugins — this one is kind=standalone, so it is discovered and left
+# dormant until enabled. That file lives on the volume and is operator-owned:
+#     hermes plugins enable rtk-rewrite     # once per profile, then restart
+# See docs/rtk-command-rewrite.md.
+#
+# The smoke check is not ceremony: three of the four ways this breaks are
+# silent (binary off the agent's PATH -> hook never registers; manifest not
+# accepted -> plugin never loads; adapter/binary contract drift -> no rewrite),
+# and each one leaves a perfectly healthy agent that simply reads full output
+# forever. See docker/rtk-smoke.py for what each check defends.
+COPY docker/rtk-install.sh docker/rtk-smoke.py /opt/hermes/docker/
+RUN chmod +x /opt/hermes/docker/rtk-install.sh && \
+    /opt/hermes/docker/rtk-install.sh && \
+    /opt/hermes/.venv/bin/python /opt/hermes/docker/rtk-smoke.py
+
+# rtk's usage ping already requires explicit consent (unset by default) and the
+# published builds compile in no collector URL, so this is belt-and-braces: the
+# agent's own commands never phone home even if a future build ships one.
+ENV RTK_TELEMETRY_DISABLED=1
+
 # Wrap the stock entrypoint so the mitigation runs before anything opens the
 # LCM database. Declaring ENTRYPOINT resets the base image's CMD, so re-declare
 # it — docker-compose.yaml passes `command: gateway run` for this service, so
