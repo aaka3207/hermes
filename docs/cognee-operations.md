@@ -173,12 +173,25 @@ For **Claude Desktop / Claude Code**:
 
 | Layer | File / place | Scope |
 |---|---|---|
-| Stack definition | `deploy/cognee-selfhost.compose.yaml` (this repo) | source of truth, pushed to Coolify |
+| Stack definition | `deploy/cognee-selfhost.compose.yaml` (this repo) | source of truth — **not** auto-deployed, see below |
 | Secrets | Coolify service env vars | container-wide |
 | Domains | Coolify UI **Domains** field | per sub-service |
 | Hermes provider | `/opt/data/cognee.json` | **personal profile** |
 | Hermes provider | `/opt/data/profiles/dinefile/cognee.json` | **`dinefile` profile** |
 | Dataset overrides | `dataset-overrides.json` | per profile |
+
+**Committing the compose does not deploy it.** This stack is a Coolify
+*Service* whose compose is stored **inline** in Coolify (`docker_compose_raw`),
+not pulled from this git repo. The repo file is the reviewed source of truth;
+applying it means pasting it into the service's compose editor in the Coolify
+UI and redeploying that service. Nothing warns you — the containers simply keep
+running the older compose, and a change that looks shipped is not. Verify a
+deploy landed by checking the live containers, not the file. Example, for the
+networks change below:
+
+```bash
+docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' <cognee-backend container>
+```
 
 `config.py` builds a dict from `COGNEE_*` environment variables, then does
 `config.update({k: v for k, v in file_config.items() if v is not None})`.
@@ -412,16 +425,40 @@ copy `mnemosyne.db`, `mnemosyne.db-wal` and `mnemosyne.db-shm` together and
 verify the row counts against `mnemosyne_stats` before seeding.
 
 **Leftover Coolify rows.** An orphaned `postgres` database resource (id 32,
-exited) remains from the naming collision above, and should be deleted from
-the Coolify UI. A stray project named "Hermes" was also created and removed;
-the `hermes` app itself lives in **Main**.
+exited) remained from the naming collision above. **Deleted 2026-09-23** — and
+it was not cosmetic: Coolify counted that exited row toward service health, so
+the service reported `degraded:unhealthy` permanently while all four containers
+were healthy and serving. That is a status light stuck red, which hides the
+next real fault. Deleting it cleared the service to `running:healthy`.
+
+Deleting it is nonetheless the most dangerous click in this document. Both
+that row and the live database derive from the same `pg_data` volume name, so
+**"delete associated volumes" must be unchecked** — leaving it checked destroys
+the live store and the whole seed with it. Take a dump first (§9). A stray
+project named "Hermes" was also created and removed; the `hermes` app itself
+lives in **Main**.
+
+**Coolify's description field rejects colons.** Saving any change to the
+service fails with *"The description may only contain letters ... - _ . , ! ? ( )
+' " + = * / @ &"* if the existing description contains a `:`. The description
+was accepted when first set and a later validator rejects it, so the error
+appears while editing something else entirely — the compose, usually — and
+looks like the compose was rejected. Replace the colons with dashes.
 
 **The `hermes` healthcheck is misconfigured, and Hermes is fine.** The
 healthcheck probes `:8642`; Hermes actually listens on `9119`, `30000` and
-`41367`. The only consequence is that `hermes-api.aakashe.org` and
-`hermes-dashboard.aakashe.org` return 404. This is unrelated to Cognee and
-predates it — recorded here only because it looks alarming while working on
-this stack.
+`41367`. This is unrelated to Cognee and predates it — recorded here only
+because it looks alarming while working on this stack.
+
+A related trap, seen 2026-09-23: after a Hermes redeploy,
+`hermes-dashboard.aakashe.org` and `hermes-api.aakashe.org` returned **502**
+while `hermes-webui` on the *same* network was fine. The container was healthy
+and reachable from inside `coolify-proxy` (302 by both IP and name) and its
+Traefik labels were correct, so the 502 was stale proxy registration, not
+configuration. Confirm it is local by hitting the origin directly —
+`curl -H 'Host: hermes-dashboard.aakashe.org' http://127.0.0.1/` — which
+removes Cloudflare from the question. Redeploying the app fixed it; restarting
+`coolify-proxy` is the bigger hammer.
 
 ---
 
@@ -508,6 +545,28 @@ docker exec cognee-mcp-lndyf8z46p75oh524khm5z19 env | grep -E 'API_URL|AUTH_SCHE
 docker logs --tail 50 cognee-backend-lndyf8z46p75oh524khm5z19
 docker logs --tail 50 cognee-mcp-lndyf8z46p75oh524khm5z19
 
+# THE check that matters for Hermes -> backend. curl's own UA is allowed by
+# Cloudflare and the plugin's is not, so a plain curl proves nothing (see §5).
+# Run it INSIDE the hermes container, against the INTERNAL url, with the
+# plugin's UA:
+docker exec <hermes> curl -s -o /dev/null -w '%{http_code}\n' \
+  -A 'Python-urllib/3.13' http://cognee-backend:8000/health
+
+# Stronger still -- drive the plugin's own code path (no HTTP guesswork):
+#   from cognee_integration_hermes.http_backend import HttpBackend
+#   HttpBackend().connect(url=..., api_key=..., timeout=30)
+# Expect it to return without raising; `registered` becomes True.
+
+# Row count in the live store (1381 on 2026-09-23)
+docker exec <cognee-postgres> psql -U cognee -d cognee_db -tAc 'select count(*) from data;'
+
+# Backup BEFORE any Coolify delete, volume change or version bump. 31MB today.
+docker exec <cognee-postgres> pg_dump -U cognee -d cognee_db -Fc -f /tmp/cognee_db.dump
+docker cp <cognee-postgres>:/tmp/cognee_db.dump ~/cognee_db-$(date +%Y%m%d-%H%M).dump
+docker exec <cognee-postgres> rm -f /tmp/cognee_db.dump
+# Restore:
+docker exec -i <cognee-postgres> pg_restore -U cognee -d cognee_db --clean /dev/stdin < ~/cognee_db-<stamp>.dump
+
 # Regression gate (from the repo root)
 python3 scripts/cognee/compose_invariants.py deploy/cognee-selfhost.compose.yaml
 python3 tests/test_compose_invariants.py
@@ -538,29 +597,61 @@ loses a month. That is the reason §11 needs a date, not just a verdict.
 
 ## 10. Current live state
 
-Verified **2026-09-20**:
+Verified **2026-09-23**. The personal profile is live on this backend.
 
-- All four containers healthy.
+- All four containers healthy; Coolify service `running:healthy`.
 - `GET /health` → `{"status":"ready","health":"healthy","version":"1.6.0-local"}`.
 - `GET /api/v1/datasets` unauthenticated → **401**; with `X-Api-Key` → **200**.
-- `cognee-mcp` reaches `http://cognee-backend:8000` and authenticates
-  (200 with `X-Api-Key`, 401 without), advertising `remember`/`recall`/`forget`.
-- Backend routed at `https://cognee.aakashe.org`.
+- `cognee-mcp` reaches `http://cognee-backend:8000` and authenticates,
+  advertising `remember`/`recall`/`forget`.
+- Backend routed at `https://cognee.aakashe.org`; UI at
+  `https://cognee-ui.aakashe.org` (login is `DEFAULT_USER_EMAIL` /
+  `DEFAULT_USER_PASSWORD`, read only on first boot — changing them in Coolify
+  afterwards does nothing).
 
-Outstanding, and both are deliberately hand-run:
+**Seed complete, with a known shortfall.** 1380 of 1471 records landed in
+dataset `shared`, 0 duplicates: memories 3/3, episodic 252/252, working
+1125/1216 — **93.8%**. The 91 missing are index 574 plus the contiguous run
+1381–1470, lost to Cloudflare 524s and 404s because the bulk load was routed
+through the public URL. Re-running them over the internal route has no such
+ceiling. Live row count in `data` is 1381 (the extra is the preflight item).
 
-- The Mnemosyne seed (§8) has not been run.
-- The personal profile's `/opt/data/cognee.json` has not been written, so
-  **Hermes is still on Mnemosyne**.
+**Personal profile flipped.** `/opt/data/config.yaml` has
+`memory.provider: cognee` with `cognee` in `plugins.enabled`, and
+`/opt/data/cognee.json` points at `http://cognee-backend:8000`, dataset
+`shared`, with an explicit `api_key`. `hermes memory status` reports
+`Provider: cognee`, `Status: available ✓`.
+
+**`dinefile` is untouched and still on Cognee Cloud** —
+`tenant-acc9068f-…aws.cognee.ai`, dataset `dinefile`, inheriting the
+container-wide `COGNEE_API_KEY`. It was never signalled or restarted during
+any of this.
+
+**The direct route is redeploy-proof, and this was tested rather than
+assumed.** `cognee-backend` joins the Hermes application's network from the
+compose, so the route no longer depends on a runtime `docker network connect`.
+Proof: the manual attachment was removed, and a subsequent Hermes redeploy
+produced a fresh container on its own network only — `http://cognee-backend:8000`
+still answered 200 under the plugin's UA, and `HttpBackend.connect()` still
+succeeded, with no manual step.
+
+Known leftovers, none blocking: the 91 unseeded records; stray
+`preflight-check` and `hermes` datasets on the backend; `gateway-dinefile`
+down since ~2026-09-16 (unrelated to Cognee).
 
 ---
 
 ## 11. Evaluation verdict
 
-**Not yet recorded.** The §10 criteria — recall relevance, added per-turn
-latency, cost per active day, operational noise, cross-agent sharing — cannot
-be measured before the seed lands and the personal profile is flipped. The
-infrastructure is verified; the *evaluation* has not started.
+**Not yet recorded — but the clock started 2026-09-23**, the day the seed
+landed and the personal profile was flipped (§10). Until then the criteria
+could not be measured at all; now they can, and the observation window is
+open. Nothing about recall relevance, latency, cost or noise has been measured
+yet, so there is still no verdict — only a start date.
+
+First observations, offered as anchors and not as evidence: a `remember` round
+trip runs the full cognify pipeline (chunk, LLM extract, embed, write) and
+took ~11s end to end, which is the cost Cloud was absorbing invisibly.
 
 When it does, record here: the date the profile was flipped, at least a week
 of observation against each criterion, and a plain yes or no on replacing
