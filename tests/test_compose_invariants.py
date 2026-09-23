@@ -31,6 +31,10 @@ services:
     image: cognee/cognee:1.6.0
     expose:
       - "8000"
+    networks:
+      - default
+      - coolify
+      - hermes
     environment:
       - ENV=prod
       - DEBUG=false
@@ -46,7 +50,7 @@ services:
       - GRAPH_DATABASE_PROVIDER=kuzu
       - EMBEDDING_DIMENSIONS=1536
       - EMBEDDING_MODEL=openrouter/openai/text-embedding-3-small
-      - LLM_MODEL=openrouter/deepseek/deepseek-v4-flash
+      - LLM_MODEL=openrouter/openai/gpt-oss-120b:nitro
   cognee-mcp:
     image: cognee/cognee-mcp:main-bbec4a2
     expose:
@@ -62,6 +66,13 @@ services:
 
   cognee-postgres:
     image: pgvector/pgvector:pg17
+
+networks:
+  coolify:
+    external: true
+  hermes:
+    external: true
+    name: tgg4k0sc8wgocck08cc4s4cg
 """
 
 

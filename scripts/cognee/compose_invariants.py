@@ -44,7 +44,7 @@ REQUIRED_SETTINGS = {
     "VECTOR_DB_HOST": "cognee-postgres",
     "EMBEDDING_DIMENSIONS": "1536",
     "EMBEDDING_MODEL": "openrouter/openai/text-embedding-3-small",
-    "LLM_MODEL": "openrouter/deepseek/deepseek-v4-flash",
+    "LLM_MODEL": "openrouter/openai/gpt-oss-120b:nitro",
     "DB_PROVIDER": "postgres",
     "VECTOR_DB_PROVIDER": "pgvector",
     "GRAPH_DATABASE_PROVIDER": "kuzu",

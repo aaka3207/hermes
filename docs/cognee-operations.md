@@ -94,10 +94,30 @@ verified against this backend.
 Both halves go through OpenRouter using Cognee's `custom` provider, which
 routes via LiteLLM:
 
-- **Extraction:** `openrouter/deepseek/deepseek-v4-flash` — parity with what
-  the Hermes gateway already uses, so there is one model to reason about.
+- **Extraction:** `openrouter/openai/gpt-oss-120b:nitro` (changed 2026-09-23
+  from `openrouter/deepseek/deepseek-v4-flash`). Smoke-tested end to end after
+  the change: `extract_graph_and_summarize` — the LLM-dependent stage —
+  completed with no errors, and a full `remember` round trip took **7.6s**
+  against ~11s on the previous model.
 - **Embeddings:** `openrouter/openai/text-embedding-3-small` at **1536**
   dimensions.
+
+**Extraction is swappable; embeddings are not.** `LLM_MODEL` can be changed at
+any time — it affects only how future text is interpreted, and existing rows
+stay readable. `EMBEDDING_MODEL` and `EMBEDDING_DIMENSIONS` are baked into the
+store at first use (the dimension becomes the pgvector column type), so
+changing them after seeding means re-embedding the entire corpus and rebuilding
+the column. `compose_invariants.py` pins all three, but only the embedding pair
+carries the irreversibility warning.
+
+**After changing the model in Coolify, verify extraction actually ran.** A
+model that the pipeline cannot use fails inside `extract_graph_and_summarize`,
+and `remember` can still return 200 because the payload is persisted before the
+extraction stage. Confirm with a real write rather than by reading env:
+
+```bash
+docker logs --since 5m <cognee-backend> | grep -E 'task (started|completed)|Pipeline run completed'
+```
 
 `EMBEDDING_DIMENSIONS` must match the model. It is written into the pgvector
 column type at first use, so it is fixed the moment the store has data:
