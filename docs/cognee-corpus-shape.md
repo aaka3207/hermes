@@ -11,10 +11,11 @@ question: two prefixes separate durable from disposable without an LLM.
 
 ## 1. The short version
 
-**About 35% of the corpus is worth keeping**, with a further 5% needing a
-human call. Most of it is raw
-conversational turns that Mnemosyne's `working_memory` tier held transiently
-and the export wrote into permanent storage.
+**36% of the corpus is worth keeping** -- 517 of 1,433 records. The rest is
+mostly raw conversational turns that Mnemosyne's `working_memory` tier held
+transiently and the export wrote into permanent storage, plus a smaller
+population of agent worker prompts that leaked in through ambient capture
+(§6).
 
 The corpus is also **three months old, not two years** -- 2026-07 (37),
 2026-08 (634), 2026-09 (709). An earlier claim in
@@ -175,20 +176,60 @@ That leaves 41 genuine one-offs to read.
 |---|---:|
 | mechanically durable (model-slot + episodic) | 311 |
 | classifier-settled keep, from the unmarked 403 | 187 |
-| **settled keep** | **498** |
-| unstable, needs a human | 74 |
+| human-reviewed keep, from the unstable 74 | 19 |
+| **settled keep** | **517** |
 | mechanically disposable (short + transcript) | 555 |
 | discord relay (57% near-empty once stripped) | 164 |
 
-So **498 of 1,433 are settled keeps (35%)**, with 74 records -- an afternoon's
-reading, and mostly one policy call -- as the entire remaining ambiguity.
+So **517 of 1,433 are keeps (36%)**. The 74 undecidable records were reviewed
+by hand; §6 records what that resolved to.
 
-A re-seed of ~500 records is **~1.3 hours** at the measured ~9s per write,
+A re-seed of ~520 records is **~1.3 hours** at the measured ~9s per write,
 against ~3.5 hours for the whole corpus, and the graph should improve by more
 than the ratio suggests because the dropped populations are disproportionately
 the ones generating singleton entities and junk hubs.
 
-## 6. Caveats
+## 6. The 74, resolved
+
+Reviewed by hand: **19 keep, 55 drop.** The record text is deliberately not in
+this repo -- it is raw personal memory, including health -- so what follows is
+the decision, not the data.
+
+**31 of the 74 were one call, not thirty-one.** Gmail worker prompts (16),
+cron-job preambles (8) and async delegation notices (7): operational text that
+leaked into memory through the ambient capture path. All dropped. Their source
+of truth is the cron definition or the prompt file, so a copy in memory goes
+stale silently, and they are self-similar enough to crowd real records out of
+retrieval -- the `mnemosyne` / `working_memory` hub problem
+(`cognee-graph-analysis.md` §4) arriving through a different door.
+
+This is also *why* the classifier could not settle them. Same text, both
+verdicts, across passes: "is a reusable instruction a memory?" is a policy
+question, and nothing in the record answers it.
+
+**The remaining 43 split 19 keep / 24 drop.** The keeps are standing
+preferences, project definitions, one MCP configuration and one medical
+assessment. Several were rewritten rather than kept verbatim -- where the
+durable fact was one clause inside a paragraph of conversation, the fact was
+extracted and the paragraph dropped.
+
+**The classifier's bias, measured against the hand pass.** It disagreed on 14
+of 74, and the disagreements were directional: it kept operational logs and
+one-off command output that read as "concrete", and it dropped personal
+preferences stated casually (*"I just want max side income minimal time used"*).
+Good at spotting noise, weak at recognising an offhand preference. Worth knowing
+before reusing `classify_unmarked.py` on another corpus -- the rubric needs
+strengthening on the second failure mode, not the first.
+
+**One judgment call that may need reversing.** Six drops describe Mnemosyne
+internals -- sleep-model refresh, backup policy, prefetch measurements,
+`sync_turn` semantics, an unused fork. They were dropped because the personal
+profile's provider is now `cognee`. But `mnemosyne-mcp` is still a running
+container and the shared surface still exists, so if Mnemosyne is touched again,
+two of the six (its backup policy, and the "this fork is dead" marker) are worth
+restoring. `memory_only` retraction keeps that reversible.
+
+## 7. Caveats
 
 * **18.4% of the unmarked population is genuinely undecidable by classifier**
   and is reported as such rather than rounded into the keep or drop pile.
@@ -208,7 +249,7 @@ the ones generating singleton entities and junk hubs.
   (1,447 files, 155 MB), so a cut that turns out wrong can be re-ingested
   without going back to Mnemosyne.
 
-## 7. Related
+## 8. Related
 
 * `docs/cognee-graph-analysis.md` -- what the graph built from this corpus
 * `docs/cognee-consolidation-design.md` -- retraction, and the consolidation sketch
