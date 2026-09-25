@@ -11,7 +11,8 @@ question: two prefixes separate durable from disposable without an LLM.
 
 ## 1. The short version
 
-**Roughly a third of the corpus is worth keeping.** Most of it is raw
+**About 35% of the corpus is worth keeping**, with a further 5% needing a
+human call. Most of it is raw
 conversational turns that Mnemosyne's `working_memory` tier held transiently
 and the export wrote into permanent storage.
 
@@ -108,52 +109,94 @@ graph wants, and they are 4% of the corpus.
 
 ## 4. The one population that needed reading
 
-`unmarked, ≥80 chars` (403 records) is the only group the markers could not
-sort, so 40 were sampled evenly across the corpus and read by hand.
+`unmarked, >=80 chars` (403 records) is the only group the markers cannot
+sort. It was resolved in two steps.
 
-Of the 23 non-Discord records in that sample, **12 were clearly durable** --
-project decisions, standing instructions, factual records:
+### First, by hand -- and the hand estimate was wrong
 
-```
-DineFile (formerly recd) uses Vercel for hosting, Supabase for
-backend/auth/database/storage, PostHog for product analytics, Resend for
-email, and Upstash Workflows for durable workflow orchestration.
+40 records were sampled evenly and read. That reading is where the
+`model:x::y confidence=` and `[Triggering message id:` markers came from, so it
+earned its keep. But the durability rate it produced did not survive scrutiny:
+"12 of 23 non-Discord records were durable, so ~50%" **conflated populations**,
+because 7 of those 12 were `model:` records, which are their own population and
+already counted as durable. For the unmarked group alone it was closer to 5 of
+17.
 
-use the hermes desktop browser from now on (if you know you're on hermes desktop)
+### Then, by classifier, three times
 
-I want you to start making a weekly report for me of my workouts for that
-week. posting to the discord channel
-```
+All 403 were labelled against one rubric (`scripts/cognee/classify_unmarked.py`),
+and the whole run was repeated three times because a single pass produces a
+number without saying whether the number repeats.
 
-The rest were conversational turns -- opinions mid-discussion, one-time task
-instructions, questions. A handful were genuinely borderline (a preference
-embedded in an aside).
+**The aggregate repeats. The individual records do not.**
 
-So roughly **50% of this population is durable**, or about 200 records. That
-figure comes from a 23-record read and is the softest number in this document.
+| pass | keep |
+|---|---:|
+| 1 | 220 (54.6%) |
+| 2 | 225 (55.8%) |
+| 3 | 222 (55.1%) |
 
-One sample was a test artifact: *"the agent wants you to ask it to 'remember
-that this is an author-attribution test row.'"*
+| agreement across 3 passes | records | |
+|---|---:|---|
+| stable KEEP (3/3) | 187 | 46.4% |
+| stable DROP (3/3) | 142 | 35.2% |
+| **unstable** | **74** | **18.4%** |
+
+So the answer is not a percentage, it is a band: **187 settled keep, 142
+settled drop, 74 that need a human.** Scoring the run against the 13 hand
+labels: 9 agree, 3 disagree, 1 not found -- and **all three disagreements are
+classifier-keep against hand-drop**, so the rubric is more permissive than the
+hand pass was. On review it is probably right about two of the three.
+
+### The 74 collapse to a handful of decisions
+
+They are not 74 independent judgements. The classifier wavers on whole *kinds*
+of record (`scripts/cognee/triage_review.py`):
+
+| cluster | records | lean |
+|---|---:|---|
+| prose (judge individually) | 41 | 18 keep / 23 drop |
+| agent worker prompt (Gmail / Composio) | 14 | 7 / 7 |
+| scheduled cron-job prompt | 8 | 1 / 7 |
+| async delegation / system notice | 8 | 4 / 4 |
+| workout / health observation | 2 | 2 / 0 |
+| Notion page/bookmark created | 1 | 0 / 1 |
+
+**30 of the 74 are operational prompt text that leaked into memory** -- Gmail
+monitor worker prompts, cron-job preambles, async-delegation notices. Those are
+one policy call, not thirty. Whether a reusable worker prompt counts as a
+durable memory is a real question, but it is *one* question.
+
+That leaves 41 genuine one-offs to read.
 
 ## 5. Where that lands
 
 | | records |
 |---|---:|
 | mechanically durable (model-slot + episodic) | 311 |
-| judged durable (~50% of unmarked ≥80) | ~200 |
-| **estimated keep** | **~510 of 1,433 (36%)** |
+| classifier-settled keep, from the unmarked 403 | 187 |
+| **settled keep** | **498** |
+| unstable, needs a human | 74 |
 | mechanically disposable (short + transcript) | 555 |
 | discord relay (57% near-empty once stripped) | 164 |
 
-A re-seed of ~510 records is **~1.3 hours** at the measured ~9s per write,
-against ~3.5 hours for the whole corpus -- and the graph should improve by more
-than the ratio suggests, because the dropped populations are disproportionately
+So **498 of 1,433 are settled keeps (35%)**, with 74 records -- an afternoon's
+reading, and mostly one policy call -- as the entire remaining ambiguity.
+
+A re-seed of ~500 records is **~1.3 hours** at the measured ~9s per write,
+against ~3.5 hours for the whole corpus, and the graph should improve by more
+than the ratio suggests because the dropped populations are disproportionately
 the ones generating singleton entities and junk hubs.
 
 ## 6. Caveats
 
-* **The ~50% durable rate for the unmarked population rests on 23 hand-read
-  records.** Everything else here is a full-corpus count.
+* **18.4% of the unmarked population is genuinely undecidable by classifier**
+  and is reported as such rather than rounded into the keep or drop pile.
+* **Classification is not reproducible at the record level.** Three passes over
+  identical input disagreed on 74 records. Any future automated pass over this
+  corpus should be run more than once and scored for agreement, not trusted on
+  a single run -- the same non-determinism that makes graph repair
+  non-convergent (`cognee-consolidation-design.md` §4).
 * **Discord relay turns are not uniformly disposable.** 43% carry over 60
   characters of content, and some of those are real. Stripping the scaffolding
   and re-running the length test is the cheap way to sort them.
@@ -170,4 +213,6 @@ the ones generating singleton entities and junk hubs.
 * `docs/cognee-graph-analysis.md` -- what the graph built from this corpus
 * `docs/cognee-consolidation-design.md` -- retraction, and the consolidation sketch
 * `scripts/cognee/extraction_prompt.txt` -- the replacement extraction prompt
-* `scripts/cognee/corpus_shape.py` -- reproduces every count above
+* `scripts/cognee/corpus_shape.py` -- reproduces the structural counts
+* `scripts/cognee/classify_unmarked.py` -- labels the unmarked population
+* `scripts/cognee/triage_review.py` -- scores stability, clusters the remainder
