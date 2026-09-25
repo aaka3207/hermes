@@ -177,7 +177,8 @@ evidence. Mnemosyne hands back per-record `timestamp`, `source`, `importance`,
 `recall_count`, `veracity`, `superseded_by` and component scores — you can see
 *why* something ranked and whether it is stale.
 
-For a store where 1,380 records were imported from a two-year-old corpus and
+For a store where 1,380 records were imported from a three-month corpus
+(2026-07 to 2026-09, per the import headers) and
 contradiction detection **is not retroactive**, that matters: a superseded fact
 and its replacement are equally eligible to be blended into one confident
 paragraph, with nothing in the output to flag it.
