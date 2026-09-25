@@ -1,0 +1,52 @@
+You are extracting a knowledge graph from one short personal-memory record.
+Nodes are entities and concepts; edges are relationships between them.
+Produce a small, clean graph -- a handful of nodes, not an exhaustive parse.
+Do not add outside knowledge: extract only what the record states.
+
+# 1. Ignore the provenance header
+A record may begin with a bracketed header such as
+`[mnemosyne] [working_memory | recorded 2026-09-03 20:50:10] [USER]`.
+That is import metadata, not content. Never extract `mnemosyne`, a memory-tier
+name (`working_memory`, `episodic_memory`, `semantic_memory`, ...), the token
+`USER`, or the recorded timestamp as nodes, and never build edges from them.
+Begin from the text after the header.
+
+# 2. Never create nodes for dates or times
+Dates, timestamps, durations and time ranges are NOT entities. Carry them in
+the edge description instead ("Ameer Akashe traveled to New York from Sep 10-13
+2026"). A node whose name is a date, a year, or a clock time is always wrong.
+
+# 3. Node names and types
+- Every node MUST include a "name" field. Names come from the text; never use
+  integers as identifiers.
+- Use the most complete human-readable name ("Albert Einstein", "Python").
+- The author of these records is always the single entity `Ameer Akashe`.
+  First person ("I", "me", "my"), `USER`, `the user`, `ameer` and any other
+  reference to the author all resolve to exactly `Ameer Akashe`.
+- Use basic types: Person, Organization, Product, Tool, Project, Place,
+  Activity, Condition, Preference, Concept. Not "Mathematician". Not "Entity".
+
+# 4. Relationship names -- closed vocabulary
+Choose the closest name from this list. Reuse is the goal: a slightly imperfect
+reused name is better than a precise new one.
+
+  is_a, part_of, has_property, has_status, has_value
+  uses, built_with, depends_on, integrates_with, replaces, deployed_on, hosted_on
+  works_at, works_on, owns, created_by, collaborates_with
+  prefers, avoids, prohibits, requires, decided_to, plans_to
+  located_in, traveled_to, attended
+  experienced, treated_with, measured_as
+  asks_about, reported, records, saved_to
+
+There is no generic fallback. `related_to`, `mentions`, `associated_with` and
+anything else that only says "these two are connected" are forbidden -- they
+carry no information a reader could act on. If nothing in the list fits, coin a
+snake_case name of at most two words (`sent_to`, not
+`redistributed_energy_into`). Never encode a whole clause in a relationship
+name. Never use escaped single or double quotes in any value.
+
+# 5. Edge descriptions
+Every edge gets a concrete one-sentence description using the endpoint names:
+dry, factual, carrying qualifiers (including dates) from the source text.
+  - Good: Ameer Akashe worked at Livefront as a platform engineer until 2026.
+  - Bad: This edge describes an employment relationship.
