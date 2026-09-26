@@ -448,3 +448,74 @@ sidecar "alone performs no extraction or backfill" (operator-guide.md:259), so
 what it costs to populate against 21,335 existing messages is unknown, as is
 whether extraction quality is any better than the graph extraction that failed
 in tier 3. Measure before committing.
+
+## 11. Routing: when to reach for which layer
+
+This is the content of stage 2 in §5.4. It has to be answerable in one line per
+case, or an agent will not follow it.
+
+### The asymmetry that drives everything
+
+| layer | Hermes | Claude Desktop |
+|---|---|---|
+| 1 `MEMORY.md` / `USER.md` | yes, always in context | **no** |
+| 2 `hermes-lcm` | yes | **no** |
+| 3 shared store | yes | yes |
+| 4 Notion | yes | yes |
+
+Two of the four layers are Hermes-only. **So anything the other agent will ever
+need must live in tier 3 or tier 4.** A fact Hermes files in `MEMORY.md` or
+leaves sitting in its transcript is, from Claude Desktop's side, a fact that
+does not exist. This is the single rule most likely to be violated in practice,
+because from inside a Hermes session all four layers feel equally available.
+
+### Read routing
+
+| the question is… | go to | why |
+|---|---|---|
+| how should I behave, what does the user want from *me* | **1** | already in context; no retrieval call |
+| what did we actually say, decide, or agree — and when | **2** LCM | it has the transcript verbatim, with dates and exact spans |
+| what is true about the user, stated once, needed everywhere | **3** | the only durable layer both agents share |
+| what is the current state of a project, person, plan, or account | **4** Notion | the only layer that claims to be current |
+
+The 2-versus-3 line is **who said it and where**, not how important it is.
+Conversation provenance is tier 2. A standing fact about the user is tier 3,
+even when it was first said in a conversation — in which case it should have
+been *written* to tier 3 at the time (see below).
+
+### Write routing
+
+When something new is learned, ask **who the fact is about**:
+
+* about **this agent's behaviour** → tier 1.
+* about **the user**, and small — a preference, a one-off fact that does not
+  justify a page → tier 3. Write it at the moment it is learned, not later.
+* about **the user**, and substantial — an event, a person, a decision with
+  ongoing state → tier 4, as a page, **plus one tier-3 pointer record** saying
+  the page exists, when it was created, and what it covers, including the page
+  id. Edits to that page produce no further tier-3 writes.
+* nothing is ever *written* to tier 2. It captures itself.
+
+### Four rules that cut across all of it
+
+1. **Anything you will act on must come back verbatim.** Ids, dates, amounts,
+   titles. Use tier 2's exact refs or tier 3 with `search_type: "CHUNKS"`.
+   Never a completion — completions paraphrase, and a paraphrased identifier is
+   a wrong identifier (§5.2).
+2. **A tier-3 hit naming a Notion page is a pointer, not an answer.** Fetch the
+   page before answering from it. The page is current; the record only claims
+   the page exists.
+3. **On conflict, most recent wins — and say so, with where each came from.**
+   Tier 4 beats tier 3 on current state, because tier 3 records are dated
+   assertions and never claim to be current.
+4. **Never answer from tier 2 alone for something the other agent should also
+   know.** If the answer came out of a transcript and it is durable, write it
+   to tier 3 in the same turn. Otherwise it stays invisible to Claude Desktop
+   and dies with the conversation.
+
+### Where recall actually goes wrong today
+
+The observed failure in §5.3 was a routing failure, not a storage failure: the
+agent answered a tier-3 question ("who is this person") out of tier 2, then
+reported it as a stored memory. Both halves were wrong — the wrong layer, and a
+provenance claim it had not checked. Rule 4 and rule 1 exist for exactly that.
