@@ -333,3 +333,40 @@ no off switch. Revisit with that on the table, not just the criteria.
   query surface
 * `cognee-consolidation-design.md` — retraction semantics, and the `improve()`
   stages including the fatal one
+
+## 9. Three tiers, not two
+
+Added 2026-09-26, after the store was rebuilt. §3 described a two-way split
+between memory and Notion. That was one tier short, and the missing one is why
+a whole population of records was undecidable during triage.
+
+| tier | store | holds |
+|---|---|---|
+| 1 | Hermes' `/opt/data/memories/MEMORY.md`, `USER.md` | preferences about **how this agent should behave** |
+| 2 | the shared memory store | preferences and events **about the user**, that every agent needs |
+| 3 | Notion | durable life state — the global shared store |
+
+The test for tier 1 versus tier 2 is *who the fact is about*. "Deploys via
+Coolify, so check the injection layer before diagnosing credentials" is about
+Hermes. "Prefers double progression when programming lifts" is about the user,
+and Claude Desktop needs it just as much.
+
+**This resolves the triage's hardest question retroactively.** 31 of the 74
+records that three classifier passes could not settle were operational agent
+text — worker prompts, cron preambles, delegation notices
+(`cognee-corpus-shape.md` §6). The classifier wavered because *"is a reusable
+instruction a memory?"* has no answer without this distinction. With it, the
+answer is immediate: it is a memory, in tier 1, and it was in tier 2 because
+tier 1 had no stated boundary.
+
+**Hermes' `MEMORY.md` currently mixes all three.** 22 entries holding agent
+deployment facts, user preferences that belong in the shared store, Notion
+pointers with URLs, and stale entries describing a retired provider. Sorting it
+is a prerequisite for stage 2 of §5.4, not a follow-up: the prompts cannot say
+where a fact goes until the tiers are separated in the one place that already
+has facts in it.
+
+**Note the pointer entries.** Several `MEMORY.md` records are already
+"Created Notion resource: <title> — <url>". That is precisely the §3 pointer
+pattern, invented independently and filed in the wrong tier. The convention
+does not need inventing; it needs moving and making consistent.
