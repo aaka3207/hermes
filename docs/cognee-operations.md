@@ -439,6 +439,10 @@ The credential for the self-hosted backend is `COGNEE_MCP_API_TOKEN` (64 chars,
 `x-api-key` scheme), readable as `API_TOKEN` inside the `cognee-mcp` container,
 whose `API_URL` is the same internal `http://cognee-backend:8000`.
 
+The container-wide `COGNEE_*` variables are retired in §9, "Retiring the
+container-wide `COGNEE_*` variables" -- three are dead, and the fourth is
+dinefile's own cloud key sitting where the personal profile can also read it.
+
 ---
 
 ## 6. Authentication
@@ -897,6 +901,108 @@ docker exec $B tail -2 /tmp/forget_run.log        # progress
 written by `improve()`'s `persist_session_qa` stage. Deleting them again
 without disabling that stage just repeats the sweep
 (`cognee-consolidation-design.md` §2.1).
+
+### Retiring the container-wide `COGNEE_*` variables
+
+Four variables are set container-wide in Coolify. Measured 2026-09-26, **three
+of them are dead and the fourth is misfiled**:
+
+| var | value | who actually needs it |
+|---|---|---|
+| `COGNEE_BASE_URL` | the cloud tenant | nobody -- both profiles set `service_url` in JSON |
+| `COGNEE_DATASET` | `hermes` | nobody -- a dataset neither profile uses |
+| `COGNEE_PLUGIN_DATASET` | `dinefile` | nobody -- both profiles set `dataset` in JSON |
+| `COGNEE_API_KEY` | dinefile's Cognee Cloud key | **dinefile**, whose JSON has no `api_key` |
+
+The fourth is the interesting one. It is not a shared credential that dinefile
+happens to use -- it is *dinefile's private key in a container-wide slot*, so
+the personal gateway carries it too. Together with `COGNEE_BASE_URL` pointing
+at the same tenant, the personal profile's environment holds a working URL and
+a working key for dinefile's cloud corpus. That pair is the whole explanation
+of the §5 near-miss: the 25 deletes authenticated successfully and were stopped
+only by a `datasetId` that did not exist there.
+
+⚠️ **The wizard has already been run here, against the warning in §5.**
+`/opt/data/.env` -- the *personal* profile's secrets file -- contains
+`COGNEE_BASE_URL=<cloud tenant>` and an emptied `COGNEE_SERVICE_URL`, dated
+2026-09-24. That is exactly the pair `post_setup` writes
+(`provider.py:266-271`). It has been harmless only because `cognee.json`
+outranks it. So the env pointing at cloud is in **two** places, not one.
+
+Also: `cognee.json` is mode **644** and the personal profile's holds a live API
+key, while every other secret in the system is in a 600 file.
+
+#### The order, and why
+
+The risky step goes first so it can be verified on its own, and the
+irreversible-looking step (deleting from Coolify) goes last, after a check that
+proves nothing depends on it.
+
+```bash
+H=$(docker ps --format '{{.Names}}' | grep '^hermes-tgg')
+
+# 0. Back up all four files. Edit as hermes (UID 10000), never root -- a
+#    root-owned config silently stops being read (README, "Editing config.yaml
+#    safely").
+docker exec -u hermes $H sh -c 'd=/opt/data/config-backup-$(date +%Y%m%d); mkdir -p $d &&     cp /opt/data/cognee.json /opt/data/.env $d/ &&     cp /opt/data/profiles/dinefile/cognee.json $d/dinefile-cognee.json &&     cp /opt/data/profiles/dinefile/.env $d/dinefile.env && ls -la $d'
+
+# 1. Move dinefile's key into dinefile's own config. The value is read from
+#    the environment and never printed.
+docker cp scripts/cognee/relocate_api_key.py $H:/tmp/
+docker exec -u hermes $H python3 /tmp/relocate_api_key.py \
+    /opt/data/profiles/dinefile/cognee.json                 # dry run
+docker exec -u hermes $H python3 /tmp/relocate_api_key.py \
+    /opt/data/profiles/dinefile/cognee.json --commit
+
+# 2. Tighten the personal profile's config, which also holds a key.
+docker exec -u hermes $H chmod 600 /opt/data/cognee.json
+
+# 3. THE GATE. Resolve both profiles with every COGNEE_* var stripped.
+#    Non-zero exit means something still depends on the environment -- stop.
+docker cp scripts/cognee/verify_config_resolution.py $H:/tmp/
+docker exec -u hermes $H python3 /tmp/verify_config_resolution.py
+
+# 4. Drop the two stale lines from both profiles' .env files.
+docker exec -u hermes $H sh -c \
+    'sed -i "/^COGNEE_BASE_URL=/d;/^COGNEE_SERVICE_URL=/d" /opt/data/.env \
+        /opt/data/profiles/dinefile/.env && grep -ci cognee /opt/data/.env'
+```
+
+**5. Delete all four variables in Coolify**, then redeploy.
+
+**6. Re-run step 3 and a recall on each profile.**
+
+#### The one unavoidable cost
+
+Removing container-wide variables restarts the container, which restarts
+**both** gateways. Every other procedure in this document restarts
+`gateway-default` alone and leaves dinefile running; this one cannot. Pick a
+moment when an interrupted dinefile session is acceptable. It is the only step
+here that touches dinefile at all.
+
+#### Rollback
+
+The backup from step 0 restores every file. The key itself is not at risk of
+being lost by deleting it from Coolify -- step 1 has already written it into
+dinefile's `cognee.json`, which *is* the surviving copy. Confirm step 1
+succeeded before step 5, or the credential is gone.
+
+#### What this buys
+
+`cognee.json` becomes the single source of truth per profile, keys included, at
+mode 600. No environment variable points at any cognee backend, so a script
+reading `os.environ` gets **nothing** instead of getting dinefile -- the near
+miss stops being reachable rather than staying one UUID collision away.
+
+**Unproven, and why it does not matter here.** Whether a per-profile `.env` is
+loaded into that profile's gateway process could not be measured --
+`/proc/<pid>/environ` is denied even to root in this container. The evidence
+says yes (`GITHUB_TOKEN` differs between the two files, which is pointless
+otherwise), but it is inference. This procedure therefore routes the key
+through `cognee.json`, where the mechanism is directly proven by the personal
+profile already doing it, and only *deletes* from `.env`.
+
+---
 
 ---
 
