@@ -287,6 +287,32 @@ search_type: "CHUNKS"   # verbatim records, no completion paraphrase
 Both are per-call tool arguments (`schemas.py` `RECALL_SCHEMA`). Neither has a
 config default, so neither survives an agent that forgets to pass them.
 
+## 5.4 Order of work
+
+Three stages, in this order, because each depends on the one before:
+
+1. **Get the store right.** Done as of 2026-09-26 — wiped, one real record,
+   retrieval verified. The limits in §5.2 and §5.3 are known and worked around
+   rather than fixed.
+2. **Update the prompts**, for both Hermes and Claude Desktop: the §3 write
+   convention, and `scope: "graph"` + `search_type: "CHUNKS"` on every recall.
+   Nothing downstream works until both agents behave consistently.
+3. **Build the consolidation cron.** Last, because it acts on records written
+   under the convention in stage 2 and there is no point running it over
+   records that predate it.
+
+**The provider decision is still open.** After the wipe, a direct query
+returned the stored record cleanly at every query length — but the agent's
+*answer* in normal use was still wrong, because it came from the session cache
+and a second memory system rather than the store (§5.3). That is a fair reason
+to doubt the whole arrangement: a memory system whose correct retrieval is
+routinely bypassed by an uncontrollable cache is not obviously worth keeping.
+The three criteria that selected cognee — custom model and embedding
+endpoints, shareable with Claude Desktop, capable of running a life — are
+unchanged, and it still meets them. What is now also known is the cost:
+two mandatory per-call arguments with no config default, and a write path with
+no off switch. Revisit with that on the table, not just the criteria.
+
 ## 6. Open questions
 * With `improve_on_end: false`, which of `improve()`'s other eight stages are
   lost, and does any of them matter? `distill_sessions` already produces
