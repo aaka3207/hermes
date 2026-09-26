@@ -132,10 +132,31 @@ producer of those entries.
 
 ### What follows
 
-* **The transcript leak has a name and a switch.** It is
-  `persist_session_qa`, disableable with `IMPROVE_STAGES_DISABLED`. That is a
-  cognee-backend setting, so the dinefile profile (which runs against Cognee
-  Cloud) is unaffected.
+* **The transcript leak has a name, but NOT a switch.** It is
+  `persist_session_qa`, and `IMPROVE_STAGES_DISABLED` **cannot turn it off.**
+  An earlier revision of this section claimed it could; that was wrong, and it
+  was wrong in a way that took the backend down. Tried 2026-09-26:
+
+  ```
+  ValueError: IMPROVE_STAGES_DISABLED cannot disable fatal stage(s)
+  ['persist_session_qa']: skipping them would silently lose session data
+  ```
+
+  `registry.py:89` `validate_stages_disabled()` rejects a set of *fatal*
+  stages at import time, and `persist_session_qa` is one. The failure is
+  total, not degraded: `get_improve_config()` raises during app startup,
+  gunicorn's worker exits code 3, and the container crash-loops. Ours restarted
+  15 times before the variable was removed.
+
+  The lesson generalises: **`IMPROVE_STAGES_DISABLED` is validated at startup,
+  so a bad value is a boot failure, not a warning.** Check a stage against the
+  fatal list before setting it, and expect an outage if you do not.
+
+  Ways that remain, none of them a one-liner: `improve_on_end: false` in the
+  profile's `cognee.json` (Hermes-side, but all-or-nothing — it also disables
+  `distill_sessions`, the stage worth keeping), periodic retraction of the
+  `Session ID: hermes_` population (`cognee-operations.md` §9, a sweep not a
+  fix), or an upstream change.
 * **Do not build the consolidation cron yet.** Diagnose the gate first. A
   working `distill_sessions` makes most of §5 redundant.
 * **Session entries are not time-expired.** No TTL, expiry, retention or

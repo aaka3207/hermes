@@ -261,9 +261,10 @@ types.
 alongside `~/cognee-drop-candidates-20260925.json`. Nothing here is one-way.
 
 **14 transcripts reappeared during the 28 minutes.** They are written by
-`improve()`'s `persist_session_qa` stage, which is now identified and
-switchable -- see `cognee-consolidation-design.md` §2.1. Until that is turned
-off, this cut is a sweep, not a fix.
+`improve()`'s `persist_session_qa` stage. That stage is identified but **not
+switchable** -- cognee classes it as *fatal* and refuses to disable it, taking
+the backend down if you try (`cognee-consolidation-design.md` §2.1). So this
+cut is a sweep, and for now a sweep is the only available treatment.
 
 ## 7. Caveats
 
