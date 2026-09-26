@@ -654,6 +654,48 @@ docker exec <hermes container> sh -c "/command/s6-svc -r /run/service/dashboard;
 docker exec <hermes container> sh -c "ps -eo pid,etime,args | grep -E 'hermes (dashboard|gateway run)' | grep -v grep"
 ```
 
+### The cognee provider has no write-time content filter
+
+**`ignore_patterns` is a Mnemosyne feature, and switching the provider
+silently orphaned it.** `/opt/data/config.yaml` still carries eleven patterns
+under `memory.mnemosyne.ignore_patterns` — four shapes of bounded Gmail
+monitor prompt, the scheduled-cron preamble, the cron monitor, the Home
+Assistant weight sync, the Hevy weekly report, the Career Hub reminder. With
+`provider: cognee` they are dead:
+
+* `hermes_memory_provider/__init__.py:1670` — `_read_config_key` reads
+  `memory.mnemosyne.<key>`, hardcoded to that subtree.
+* `cognee_integration_hermes/provider.py` advertises `service_url`, `api_key`,
+  `llm_api_key`, `llm_model`, `dataset`, `auto_route`, `improve_on_end`. The
+  upstream docs list 17 `COGNEE_*` variables in total. None of them filters
+  content, and nothing in the package does.
+
+Three unfiltered write lanes, all in `provider.py`, all gated only on
+*usable / not-a-subagent / breaker-closed*:
+
+| lane | writes |
+|---|---|
+| `sync_turn` | every completed turn, verbatim |
+| `on_delegation` | `Delegated task: …\nResult: …`, routed through `sync_turn` |
+| `on_memory_write` | mirrors explicit memory-tool writes |
+
+Session writes are not a sandbox — `improve()` promotes them into the
+permanent graph at session end. This is what put 31 agent worker prompts and
+cron preambles into the imported corpus (`cognee-corpus-shape.md` §6), and it
+is live, not a Mnemosyne-era artifact.
+
+Checked against `main` as well as the installed 1.2.2: the unreleased 1.3.0
+moves the pin to cognee 1.6.0 and stops *reading* session scopes, but its
+changelog is explicit that "sessions are still written and still promoted into
+the graph by `improve()`". Writing is untouched.
+
+**No upstream issue exists.** The fix is a patch to the three lanes in
+`cognee_integration_hermes`, or a feature request at
+`github.com/topoteretes/cognee-integrations` (`integrations/hermes-agent/`,
+Apache-2.0). Mnemosyne also ships a `write_classifier` in
+`mnemosyne/core/filters.py` — the LLM-grade version of the same idea, also
+provider-scoped, also unavailable here.
+
 ---
 
 ## 8. Seeding from Mnemosyne
