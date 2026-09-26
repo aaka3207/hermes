@@ -161,12 +161,15 @@ for real. The loop closes without anyone deciding it should.
    evaluate against — 800 records of which a large share are transcript
    fragments and conversational turns, now including this session's own output.
    §4 is only interpretable against a clean store.
-2. **`improve_on_end: false`** on the personal profile. It is the only switch
-   that stops the session-transcript write path, since `persist_session_qa`
-   cannot be disabled individually.
+2. **`improve_on_end: false`** on the personal profile, since
+   `persist_session_qa` cannot be disabled individually. **It stops transcripts
+   reaching the permanent dataset only — per-turn writes into the session cache
+   continue and cannot be switched off. See §5.3.**
 3. **Pass `search_type: "CHUNKS"` on recall.** The single highest-value change,
    and it is an instruction to the agent rather than a config edit, because no
-   config key for it exists (§4.5).
+   config key for it exists (§4.5). §5.2 raises the stakes on this one: on a
+   clean store the completion modes still corrupt names and dates, so CHUNKS is
+   the only mode safe for anything an agent will act on.
 
 Sequencing matters: 2 before 1, or the wipe refills from the next session end.
 Runbook in `cognee-operations.md` §9, "Wiping the store and starting clean".
@@ -214,6 +217,75 @@ A write into the empty store took **4.1s**, against the ~9-11s measured on the
 bloated one.
 
 The seeded record was deleted afterwards. The store is empty.
+
+## 5.2 The real pointer record, on the clean store
+
+Claude Desktop re-wrote the same Notion-pointer memory into the empty store
+(one record, ~940 chars, prose, page id inline as free text). The queries that
+failed in §4.3 were re-run against it.
+
+**Every query returns the record under every search type.** Including the bare
+one-word name, and including a natural-language query nobody tuned for —
+*"what Notion pages do I have about dating"* returns the page with its id. That
+is the §3 pointer behaviour working end to end, with no tag format and no
+convention: ordinary prose was enough.
+
+**But the completions fabricate, and the graph proves it.** In several
+completion answers a person's name came back **truncated** — the last two
+characters dropped — and one answer put the record's creation date a day late.
+The stored graph is correct: the extracted entities carry the full name and the
+right date, so nothing is corrupted at rest. The completion LLM is mangling it
+at answer time.
+
+This upgrades the §5 recommendation. `search_type: "CHUNKS"` is not merely
+better-ranked: it is the **only mode that returns facts unaltered**. Every
+completion mode paraphrases, and paraphrase of an identifier is corruption — an
+agent acting on a truncated name searches Notion for a page that does not
+exist. A clean corpus fixed retrieval; it did not make completions safe for
+identifiers.
+
+Unchanged from `cognee-graph-analysis.md`: bare dates are still extracted as
+standalone entities (six of them from this one record).
+
+## 5.3 Correction: `improve_on_end: false` does not stop transcript writes
+
+Recorded because it was stated as fact in this document's first draft and in
+the session that produced it, and it is wrong.
+
+There are **two** write paths, and the flag only closes one:
+
+| path | what it writes | gated by |
+|---|---|---|
+| `improve()` → `persist_session_qa` | transcripts into the **permanent** dataset | `improve_on_end` |
+| `sync_turn` → `/api/v1/remember/entry` | every turn into the **session cache** | nothing configurable |
+
+`sync_turn` (`provider.py:565`) fires per turn, in a background thread, and
+checks only `_writes_enabled` — which is set from `agent_context`
+(`provider.py:316`), i.e. whether this is the primary agent rather than a
+subagent. **There is no user-facing switch for it.**
+
+Measured: `SessionQAVector_text` and `session_records` were truncated to zero,
+and a six-turn Hermes conversation refilled them to 6 and 4 within five
+minutes, with `improve_on_end: false` in force the whole time.
+
+**This is why recall returns the agent's own previous answers.** `scope`
+defaults to `auto`, and `_recall_scope_params` maps `auto` onto *both* the
+session cache and the permanent dataset (`provider.py:876`). In the observed
+conversation the assistant answered a question about a person at 19:58; at
+20:03 the same assistant was asked who that person was, recalled its own 19:58
+answer out of the session cache, and reported it as a stored memory. The loop
+from §4.7 is not a slow corpus-contamination problem — it closes **within a
+single session, in minutes**.
+
+**So the recall instruction needs two arguments, not one:**
+
+```
+scope: "graph"          # permanent dataset only, no session cache
+search_type: "CHUNKS"   # verbatim records, no completion paraphrase
+```
+
+Both are per-call tool arguments (`schemas.py` `RECALL_SCHEMA`). Neither has a
+config default, so neither survives an agent that forgets to pass them.
 
 ## 6. Open questions
 * With `improve_on_end: false`, which of `improve()`'s other eight stages are
