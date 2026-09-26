@@ -229,6 +229,42 @@ container and the shared surface still exists, so if Mnemosyne is touched again,
 two of the six (its backup policy, and the "this fork is dead" marker) are worth
 restoring. `memory_only` retraction keeps that reversible.
 
+### Executed 2026-09-26
+
+The mechanical cut was run: **662 records deleted, zero failures, 28 minutes**
+(~2.8s each), via one `POST /api/v1/forget` per record with
+`{"datasetId", "dataId"}`. Hermes stayed in use throughout -- per-record
+retraction needs no restart and never empties the graph.
+
+| marker | before | after |
+|---|---:|---:|
+| total records | 1,455 | **800** |
+| short turn (<80) | 512 | 0 |
+| discord relay | 164 | 71 |
+| ... empty once stripped | 93 | 0 |
+| session transcript | 52 | 14 |
+| test artifact | 5 | 0 |
+| episodic_memory (durable) | 252 | 252 |
+| model-slot (durable) | 59 | 59 |
+| unmarked >=80 | 403 | 404 |
+
+Both durable populations are untouched, which is the check that matters. The
+unmarked count rose by one during the run -- live use.
+
+Reference-counted retraction behaved as `cognee-consolidation-design.md` §4
+describes: the first deletion alone pruned 23 orphaned `EdgeType` nodes, so the
+graph sheds structure with the documents rather than accumulating dangling
+types.
+
+**Rollback**: every record's full text was dumped before the run to
+`~/cognee-corpus-backup-20260925.json` on the host (1,447 records, 1.1 MB),
+alongside `~/cognee-drop-candidates-20260925.json`. Nothing here is one-way.
+
+**14 transcripts reappeared during the 28 minutes.** They are written by
+`improve()`'s `persist_session_qa` stage, which is now identified and
+switchable -- see `cognee-consolidation-design.md` §2.1. Until that is turned
+off, this cut is a sweep, not a fix.
+
 ## 7. Caveats
 
 * **18.4% of the unmarked population is genuinely undecidable by classifier**
@@ -257,3 +293,6 @@ restoring. `memory_only` retraction keeps that reversible.
 * `scripts/cognee/corpus_shape.py` -- reproduces the structural counts
 * `scripts/cognee/classify_unmarked.py` -- labels the unmarked population
 * `scripts/cognee/triage_review.py` -- scores stability, clusters the remainder
+* `scripts/cognee/backup_corpus.py` -- dumps every record's raw text before a cut
+* `scripts/cognee/score_drops.py` -- emits deletion candidates with data_ids
+* `scripts/cognee/forget_drops.py` -- executes the retraction (dry run by default)

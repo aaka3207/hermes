@@ -63,6 +63,88 @@ exist as relationship names -- but those are LLM-extracted from record *text*,
 not system-generated. The extractor reaches for supersession vocabulary on its
 own.
 
+## 2.1 Correction (2026-09-26): cognee already ships the sleep cycle
+
+**Most of §5 describes a Hermes cron job that cognee 1.6.0 already implements
+as a stage of `improve()`.** This was found by reading the running source; it
+was not in the docs we had read. The rest of this document is still useful for
+the *crawl* (§6) and the failure modes (§7), but the core "read sessions,
+distill facts, write them back" loop should not be built from scratch.
+
+`improve()` runs nine stages, in order:
+
+```
+feedback_weights, persist_session_qa, persist_agent_traces,
+extract_agent_context, distill_sessions, update_user_preferences,
+build_truth_subspace, triplet_enrichment, global_context_index
+```
+
+`cognee/modules/session_distillation/distill.py` describes its own flow:
+
+> 1. LOAD    session QA turns + distillable session-context entries.
+> 2. CURATE  pack the session timeline into batches; one curator LLM call per batch.
+> 3. ACCEPT  per proposed lesson: search prior lessons/entities, then writer/rejecter LLM.
+> 4. PERSIST render accepted lessons as documents; add + cognify them in one pass.
+
+That is the design in §5, with two properties we had not specified: an
+**accept/reject pass against prior lessons** (so a new lesson is checked
+against what the graph already believes), and a **watermark**
+(`session_persist_watermark`) that makes it resumable. Its failure semantics
+are better than what we sketched:
+
+> A failed curator batch or writer call drops only its own work mid-run, but
+> the run then finishes by RAISING (after publishing what survived) instead of
+> advancing the watermark: sealing entries behind calls that never ran would
+> mark them distilled forever -- one LLM outage on a finished session would
+> silently lose its lessons.
+
+### It runs, and it produces nothing
+
+Measured 2026-09-26, on every `improve()` call that afternoon:
+
+```
+improve: session Q&A persisted from 1 session(s)
+improve: distilled session 'hermes_...' -> status=no_gated_entries documents=0
+```
+
+And in Postgres, `node_set` across all 802 records:
+
+| node_set | records |
+|---|---:|
+| `["mnemosyne"]` | 778 |
+| `["user_sessions_from_cache"]` | 16 |
+| `null` | 8 |
+| `["session_learnings"]` | **0** |
+
+So the two session-fed stages have opposite outcomes. `persist_session_qa`
+works -- it writes the raw `Session ID: ... Question: ... Answer:` documents,
+which is where the transcript population comes from and why it regenerates
+after deletion. `distill_sessions` returns `no_gated_entries` and zero
+documents, every time. **The noisy half works and the useful half is inert.**
+
+`no_gated_entries` means it found no *session context entries* clearing
+`MIN_GATE_CONFIDENCE`. It reads those via `get_session_manager()`, not the
+persisted Q&A documents -- confirmed in `distill.py:156-171` -- so the two
+stages are independent, and disabling the dumper does not starve the distiller.
+Why nothing clears the gate is the open question; `extract_agent_context` runs
+immediately before `distill_sessions` in the registry and is the likely
+producer of those entries.
+
+### What follows
+
+* **The transcript leak has a name and a switch.** It is
+  `persist_session_qa`, disableable with `IMPROVE_STAGES_DISABLED`. That is a
+  cognee-backend setting, so the dinefile profile (which runs against Cognee
+  Cloud) is unaffected.
+* **Do not build the consolidation cron yet.** Diagnose the gate first. A
+  working `distill_sessions` makes most of §5 redundant.
+* **Session entries are not time-expired.** No TTL, expiry, retention or
+  max-age logic exists anywhere in `session_lifecycle/` or
+  `session_distillation/`; invalidation is event-driven (e.g. on document
+  delete). So a nightly job cannot arrive to find an empty cache, and a job
+  that fails for days can catch up. This was the blocking unknown for the cron
+  design and it resolves in the design's favour.
+
 ## 3. What cognee does not give us
 
 **Semantic origin.** There is no field anywhere that says a fact came from
@@ -168,6 +250,10 @@ split a compound record into atomic ones, then correct the single bad one --
 rather than "pick a winner between two assertions."
 
 ## 5. The idea
+
+> **Superseded in part -- see §2.1.** cognee 1.6.0's
+> `distill_sessions` stage already implements this loop. Read that first;
+> what remains live here is the crawl (§6) and the failure modes (§7).
 
 **Cognee is the substrate. Hermes is the curator.**
 
@@ -340,6 +426,12 @@ consolidator changes nothing that an agent consuming the answer can see. This
 may be the more urgent gap than consolidation itself.
 
 ## 8. Open questions
+
+**Why does `distill_sessions` report `no_gated_entries`?** It is the
+highest-value open question in this document: the sleep cycle exists and is
+wired in, and nothing clears `MIN_GATE_CONFIDENCE` to feed it.
+`extract_agent_context` runs immediately before it and is the likely
+producer of session-context entries. Unresolved.
 
 ~~**What does "make a correction" physically do?**~~ **Answered in §4** --
 reference-counted retraction via `forget`, then re-add. No graph mutation

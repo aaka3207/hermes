@@ -409,6 +409,36 @@ redeploy, so it is a bridge to a compose fix and not the fix:
 docker network connect <cognee network> <hermes container>
 ```
 
+### Per-profile `cognee.json` beats the container env -- and they disagree
+
+**The container-wide `COGNEE_BASE_URL` points at Cognee Cloud, not at this
+backend.** Reading the env to find the backend sends you to the wrong system.
+The authoritative value is the profile's `cognee.json`, which `load_config`
+overlays on top of every env default (`config.py`: env defaults are built
+first, then `config.update(...)` from `config_path(hermes_home)`).
+
+| profile | file | `service_url` | dataset |
+|---|---|---|---|
+| default | `/opt/data/cognee.json` | `http://cognee-backend:8000` | `shared` |
+| dinefile | `/opt/data/profiles/dinefile/cognee.json` | `https://tenant-acc9068f-....aws.cognee.ai` | `dinefile` |
+
+`HERMES_HOME=/opt/data` for the default profile, so `config_path` resolves to
+`$HERMES_HOME/cognee.json`. The two profiles are fully isolated at this layer:
+**a change to one file cannot affect the other**, which makes this the correct
+place to change cognee behaviour for the personal profile without touching
+dinefile. Coolify-level env vars are shared and are not.
+
+⚠️ **This has already caused one near-miss.** On 2026-09-26 a bulk retraction
+was aimed using `COGNEE_BASE_URL` from the hermes container, and 25 delete
+requests went to the *cloud tenant that hosts dinefile*. They failed only
+because the `datasetId` came from the self-hosted Postgres and does not exist
+there. Nothing was deleted, but nothing prevented it either. Aim writes using
+the profile's `cognee.json`, never the env.
+
+The credential for the self-hosted backend is `COGNEE_MCP_API_TOKEN` (64 chars,
+`x-api-key` scheme), readable as `API_TOKEN` inside the `cognee-mcp` container,
+whose `API_URL` is the same internal `http://cognee-backend:8000`.
+
 ---
 
 ## 6. Authentication
@@ -828,6 +858,45 @@ mv /opt/data/cognee.json /opt/data/cognee.json.disabled
 **The rollback cost grows every day.** While Cognee is the provider, new
 memories land in Cognee and not in Mnemosyne, so a rollback after a month
 loses a month. That is the reason §11 needs a date, not just a verdict.
+
+### Bulk retraction (deleting records without a re-seed)
+
+Per-record deletion, safe while Hermes is in use: no restart, no wipe, and the
+graph is never empty. Run 2026-09-26 for 662 records in 28 minutes with zero
+failures. Cognee's reference-counted retraction removes each document's unowned
+graph artifacts and prunes orphaned `EdgeType` nodes; shared entities survive.
+
+Four steps, and the first two are mandatory:
+
+```bash
+B=cognee-backend-lndyf8z46p75oh524khm5z19
+M=cognee-mcp-lndyf8z46p75oh524khm5z19
+
+# 1. Back up every record's raw text first. raw_data_location is a file:// URI.
+docker cp scripts/cognee/backup_corpus.py $B:/tmp/ && docker exec $B python /tmp/backup_corpus.py
+docker cp $B:/tmp/corpus_backup.json ~/cognee-corpus-backup-$(date +%Y%m%d).json
+
+# 2. Score candidates. Uses the same classification as corpus_shape.py.
+docker cp scripts/cognee/score_drops.py $B:/tmp/ && docker exec $B python /tmp/score_drops.py
+
+# 3. Trial one record, then verify the count moved.
+TOK=$(docker exec $M printenv API_TOKEN)
+docker exec -e COGNEE_API_KEY="$TOK" -e COGNEE_URL=http://localhost:8000 $B \
+    python /tmp/forget_drops.py --commit --limit 1
+
+# 4. The rest, detached (~2.8s per record).
+docker exec -d -e COGNEE_API_KEY="$TOK" -e COGNEE_URL=http://localhost:8000 $B \
+    sh -c 'python /tmp/forget_drops.py --commit > /tmp/forget_run.log 2>&1'
+docker exec $B tail -2 /tmp/forget_run.log        # progress
+```
+
+**Aim it with the profile's `cognee.json`, not `COGNEE_BASE_URL`** -- see §5.
+`forget_drops.py` is dry-run by default and refuses to run unauthenticated.
+
+**A sweep, not a fix.** 14 transcripts reappeared during the 28-minute run,
+written by `improve()`'s `persist_session_qa` stage. Deleting them again
+without disabling that stage just repeats the sweep
+(`cognee-consolidation-design.md` §2.1).
 
 ---
 
