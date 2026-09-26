@@ -181,11 +181,41 @@ than the prose one that worked in §4.3. Eleven seed records are staged and
 uncommitted against that question. Until it is answered, nothing justifies
 imposing a tag format on either agent.
 
-## 6. Open questions
+## 5.1 Executed 2026-09-26, and what the empty store showed
 
-* Does the three-word floor (§4.6) hold on a clean store, or is it an artifact
-  of the conversational noise? This decides whether the corpus wipe fixes
-  retrieval or merely tidies it.
+`improve_on_end: false`, then backup, then wipe, in that order. 834 records and
+247 session turns backed up to JSON on the host; `shared` deleted outright;
+the graph emptied (0 nodes, 0 edges — the Kuzu file stays 3.5 MB because Kuzu
+does not shrink on delete).
+
+**`/api/v1/forget` did not clear `SessionQAVector_text`.** The suspicion in the
+runbook was right: the endpoint is dataset-scoped, that table is session-keyed,
+and 247 rows survived a wipe that removed everything else. They were truncated
+explicitly, along with `session_records` and orphaned provenance. Anyone
+repeating this must check — a wipe that leaves them behind leaves the exact
+population that causes §4.4.
+
+**The query-length floor was entirely corpus noise.** One synthetic record was
+seeded into the empty store and queried at one, two and four words:
+
+| query | CHUNKS | GRAPH_COMPLETION |
+|---|---|---|
+| one word | the record | a correct summary of it |
+| two words | the record | a correct summary |
+| four words | the record | a correct, formatted answer |
+
+Against the old corpus the one-word case returned conversational junk under
+every search type (§4.6). It now works. **This confirms §4.4 by removal**: the
+completion mode was not broken, it was imitating the transcript turns, and with
+them gone it answers properly. §4.6's floor should be read as a symptom of the
+old corpus, not a property of cognee.
+
+A write into the empty store took **4.1s**, against the ~9-11s measured on the
+bloated one.
+
+The seeded record was deleted afterwards. The store is empty.
+
+## 6. Open questions
 * With `improve_on_end: false`, which of `improve()`'s other eight stages are
   lost, and does any of them matter? `distill_sessions` already produces
   nothing (`cognee-consolidation-design.md` §2.1), so the cost may be zero.

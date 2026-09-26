@@ -943,11 +943,24 @@ docker exec $B curl -sS -X POST http://localhost:8000/api/v1/forget \
   -d '{"dataset":"shared","everything":false,"memory_only":false}'
 ```
 
-**Verify afterwards, and expect one surprise.** `/api/v1/forget` is scoped by
-*dataset*; `SessionQAVector_text` is keyed by session, so there is no reason to
-believe a dataset wipe empties it. **This is unverified** — check it, and clear
-it explicitly if it survived, or completion-mode recall stays poisoned by the
-exact population the wipe was meant to remove (`cognee-memory-design.md` §4.4):
+**`/api/v1/forget` does not clear `SessionQAVector_text`.** Confirmed on the
+2026-09-26 run: the endpoint is dataset-scoped, that table is session-keyed,
+and **247 rows survived** a wipe that removed everything else. Clearing it is a
+required step, not a contingency — skip it and completion-mode recall stays
+poisoned by the exact population the wipe was meant to remove
+(`cognee-memory-design.md` §4.4). Same for `session_records` and the orphaned
+provenance tables:
+
+```bash
+P=cognee-postgres-lndyf8z46p75oh524khm5z19
+docker exec $P psql -U cognee -d cognee_db -tAc \
+  "copy (select row_to_json(t) from session_records t) to stdout;" \
+  > ~/cognee-session-records-backup-$(date +%Y%m%d).json
+docker exec $P psql -U cognee -d cognee_db -c \
+  'truncate table "SessionQAVector_text", session_records, provenance_entries, provenance_edge_evidence, session_model_usage;'
+```
+
+Then verify:
 
 ```bash
 P=cognee-postgres-lndyf8z46p75oh524khm5z19
