@@ -288,6 +288,8 @@ cut is a sweep, and for now a sweep is the only available treatment.
 
 ## 8. Related
 
+* `docs/cognee-memory-design.md` -- why this corpus is being rebuilt from
+  empty rather than triaged further, and what replaces it
 * `docs/cognee-graph-analysis.md` -- what the graph built from this corpus
 * `docs/cognee-consolidation-design.md` -- retraction, and the consolidation sketch
 * `scripts/cognee/extraction_prompt.txt` -- the replacement extraction prompt

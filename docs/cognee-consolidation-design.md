@@ -481,6 +481,9 @@ dependency order has not been worked out.
 
 ## 9. Related
 
+* `docs/cognee-memory-design.md` -- what the memory system is *for*, the
+  cognee/Notion division of labour, and the 2026-09-26 retrieval measurements
+  that make most of the consolidation sketch below secondary to fixing recall
 * `docs/cognee-graph-analysis.md` -- measured state of the graph
 * `claudedocs/research_cognee_graph_fragmentation_20260925.md` -- why cognee
   builds it that way, with source citations

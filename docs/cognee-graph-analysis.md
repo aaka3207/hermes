@@ -11,6 +11,11 @@ synthesis makes it look — it is mostly a star around four junk hubs, with a
 predicate vocabulary too fragmented to query. Retrieval is winning on the LLM
 and the embeddings, not on the graph structure.
 
+**Follow-up (2026-09-26):** that last sentence understates it. The default
+recall path runs an LLM *completion* over this graph, and the completion
+imitates the corpus's conversational turns instead of querying it. See
+`docs/cognee-memory-design.md` §4.
+
 ---
 
 ## 1. Shape

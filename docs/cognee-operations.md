@@ -9,6 +9,10 @@ Supersedes `docs/superpowers/specs/2026-09-20-cognee-selfhost-design.md` for
 anything operational. The spec remains the record of *why*; this is the
 record of *what is actually running*.
 
+For what the memory system is *for* — the cognee/Notion division of labour,
+and the 2026-09-26 measurements showing that recall fails on search-type
+selection rather than on data — see `docs/cognee-memory-design.md`.
+
 The `dinefile` profile is **not** part of this. It stays on Cognee Cloud,
 untouched, and nothing in this document applies to it except §5, which
 explains the one piece of configuration the two profiles share.
