@@ -370,3 +370,81 @@ has facts in it.
 "Created Notion resource: <title> — <url>". That is precisely the §3 pointer
 pattern, invented independently and filed in the wrong tier. The convention
 does not need inventing; it needs moving and making consistent.
+
+## 10. The fourth tier: hermes-lcm, and what is already installed
+
+Investigated 2026-09-26 after the tier model (§9) turned out to be missing a
+layer. The correct stack is **four** tiers:
+
+| tier | store | holds |
+|---|---|---|
+| 1 | `memories/MEMORY.md`, `USER.md` | how this agent should behave |
+| 2 | `hermes-lcm` (`/opt/data/lcm.db`) | everything ever said, losslessly |
+| 3 | the shared memory store | user facts every agent needs |
+| 4 | Notion | durable life state |
+
+### What LCM is
+
+**Lossless Context Management** — `config.yaml` sets `context.engine: lcm`, so
+it is the active *context engine*, not an add-on. It persists every message to
+SQLite with FTS, compacts older turns into a summary DAG, and exposes recall
+tools that drill back to exact text. Upstream: `stephenschoettler/hermes-lcm`,
+MIT, based on the LCM paper (Ehrlich & Blackman, Voltropy, Feb 2026).
+
+Live contents: **21,335 messages across 132 sessions**, 73 summary nodes,
+112 MB. This is why the agent could answer a question about a person with no
+matching record in the shared store — it searched its own conversation history.
+Attributing that answer to the shared store, as this document's §5.3 example
+initially did, was wrong about the source even though it was right about the
+mechanism.
+
+### It already implements most of the design in §3
+
+Two documented capabilities line up almost exactly with what §3 proposes:
+
+* **`lcm_recall`** — searches all conversations by meaning, fusing full-text
+  with summary-vector and chunk-vector arms via RRF, and returns **bounded
+  verbatim excerpts** with expand handles. Verbatim retrieval and lexical
+  matching are the two things the shared provider was measured to fail at
+  (§4.6, §5.2). Degrades to FTS-only when embeddings are off.
+* **`lcm_query_state`** — a same-DB assertion sidecar returning typed state
+  (facts, preferences, commitments, status) by subject, with an **as-of
+  boundary**, and every result carrying an exact message id, character span,
+  hash and quote. That is the dated-assertion model in §3, already specified.
+
+One deliberate difference worth noting: `lcm_query_state` "preserves unresolved
+conflicts and never treats recency alone as supersession." The stated rule in
+§2 is *most recent wins, and say so*. These are compatible — saying so requires
+seeing both — but the resolution has to happen in the prompt, not the store.
+
+### Both are switched off
+
+Measured from the live database and environment:
+
+| flag | default | here |
+|---|---|---|
+| `LCM_ASSERTIONS_ENABLED` | `false` | **not set** — no assertion tables exist in `lcm.db` |
+| `LCM_ASSERTION_EXTRACTION_ENABLED` | `false` | **not set** |
+| `LCM_EMBEDDINGS_ENABLED` | `false` | **not set** — no vector tables; `lcm_recall` is running FTS-only |
+
+Only `LCM_HERMES_BASE_DIR` is set. So LCM is running as lossless storage plus
+lexical search, with its semantic retrieval and its entire assertion layer
+dormant.
+
+`LCM_EMBEDDING_PROVIDER`, `LCM_EMBEDDING_MODEL` and `LCM_OLLAMA_BASE_URL`
+exist, so the custom-endpoint requirement that drove the original provider
+choice is satisfied here too.
+
+### What this means for the provider question
+
+The capability being built in tier 3 substantially exists in tier 2, unenabled,
+in a plugin already installed and already serving every session. Before
+replacing the shared store with a different product, the cheaper experiment is
+to turn on what is already here and measure it — `LCM_ASSERTIONS_ENABLED` and
+`LCM_EMBEDDINGS_ENABLED` are two environment variables.
+
+**Unverified, and the reason this is not yet a recommendation:** enabling the
+sidecar "alone performs no extraction or backfill" (operator-guide.md:259), so
+what it costs to populate against 21,335 existing messages is unknown, as is
+whether extraction quality is any better than the graph extraction that failed
+in tier 3. Measure before committing.
