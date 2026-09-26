@@ -11,6 +11,13 @@ graph artifacts, and this file is what a re-ingest would be driven from.
 
 ``raw_data_location`` is a ``file://`` URI, not a path -- reading it as a path
 silently reports every record as missing.
+
+Two populations, two files. ``data`` holds the documents; ``SessionQAVector_text``
+holds the raw ``User:``/``Assistant:`` turns that ``persist_session_qa`` writes,
+which live only in that table and are invisible to the document backup. They are
+the population that poisons completion-mode recall
+(``docs/cognee-memory-design.md`` §4.4), so they are worth having on disk before
+a wipe even though nothing would re-ingest them deliberately.
 """
 import json
 import os
@@ -19,6 +26,7 @@ from urllib.parse import unquote, urlparse
 import psycopg2
 
 OUT = "/tmp/corpus_backup.json"
+OUT_SESSIONS = "/tmp/session_qa_backup.json"
 
 
 def to_path(loc):
@@ -59,6 +67,29 @@ def main():
 
     print("records:", len(out), "| missing raw:", missing)
     print("wrote", OUT, os.path.getsize(OUT), "bytes")
+
+    dump_session_qa(cur)
+
+
+def dump_session_qa(cur):
+    """Dump the session Q&A vector rows, if the table exists.
+
+    Guarded rather than assumed: the table is created by ``persist_session_qa``,
+    so a store that has never run ``improve()`` will not have it, and a missing
+    table is not a failed backup.
+    """
+    cur.execute("select to_regclass('public.\"SessionQAVector_text\"')")
+    if cur.fetchone()[0] is None:
+        print("SessionQAVector_text: absent, nothing to back up")
+        return
+
+    cur.execute('select id, payload from "SessionQAVector_text"')
+    rows = [{"id": str(rid), "payload": payload} for rid, payload in cur.fetchall()]
+    with open(OUT_SESSIONS, "w", encoding="utf-8") as fh:
+        json.dump(rows, fh, indent=1, default=str)
+
+    print("session Q&A rows:", len(rows))
+    print("wrote", OUT_SESSIONS, os.path.getsize(OUT_SESSIONS), "bytes")
 
 
 main()

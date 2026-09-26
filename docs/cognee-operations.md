@@ -906,6 +906,62 @@ written by `improve()`'s `persist_session_qa` stage. Deleting them again
 without disabling that stage just repeats the sweep
 (`cognee-consolidation-design.md` §2.1).
 
+### Wiping the store and starting clean
+
+Decided 2026-09-26: the corpus is not worth triaging further and will not be
+re-seeded. Rationale in `cognee-memory-design.md` §5 — by this point it holds
+transcript fragments, conversational turns, and its own recall output (§4.7
+there), which makes it useless as a baseline for evaluating retrieval.
+
+**Order matters. Step 1 before step 3, or the store refills.** `improve_on_end`
+is what runs `improve()` at session end, and `persist_session_qa` — a stage
+that cannot be disabled individually without crash-looping the backend — writes
+a fresh transcript every time. Wipe first and the next session end starts
+rebuilding the population that was just deleted.
+
+```bash
+B=cognee-backend-lndyf8z46p75oh524khm5z19
+H=<hermes container>          # docker ps --format '{{.Names}}' | grep ^hermes
+
+# 1. Stop the refill. Personal profile only -- dinefile has its own config.
+docker exec -u hermes $H python3 -c \
+  "import json,pathlib;p=pathlib.Path('/opt/data/cognee.json');c=json.loads(p.read_text());c['improve_on_end']=False;p.write_text(json.dumps(c,indent=1)+chr(10))"
+docker exec -u hermes $H python3 -c \
+  "import json;print(json.load(open('/opt/data/cognee.json'))['improve_on_end'])"   # -> False
+
+# 2. Back up both populations. The second file is new: session Q&A rows live
+#    only in SessionQAVector_text and the document backup never saw them.
+docker cp scripts/cognee/backup_corpus.py $B:/tmp/ && docker exec $B python /tmp/backup_corpus.py
+docker cp $B:/tmp/corpus_backup.json      ~/cognee-corpus-backup-$(date +%Y%m%d).json
+docker cp $B:/tmp/session_qa_backup.json  ~/cognee-sessionqa-backup-$(date +%Y%m%d).json
+
+# 3. Wipe the dataset. memory_only=false also drops the raw files on disk;
+#    the JSON backup from step 2 is the only recovery path after this.
+TOK=$(docker exec cognee-mcp-lndyf8z46p75oh524khm5z19 printenv API_TOKEN)
+docker exec $B curl -sS -X POST http://localhost:8000/api/v1/forget \
+  -H "Content-Type: application/json" -H "X-Api-Key: $TOK" \
+  -d '{"dataset":"shared","everything":false,"memory_only":false}'
+```
+
+**Verify afterwards, and expect one surprise.** `/api/v1/forget` is scoped by
+*dataset*; `SessionQAVector_text` is keyed by session, so there is no reason to
+believe a dataset wipe empties it. **This is unverified** — check it, and clear
+it explicitly if it survived, or completion-mode recall stays poisoned by the
+exact population the wipe was meant to remove (`cognee-memory-design.md` §4.4):
+
+```bash
+P=cognee-postgres-lndyf8z46p75oh524khm5z19
+docker exec $P psql -U cognee -d cognee_db -tAc \
+  "select d.name, count(dt.id) from datasets d left join data dt on dt.dataset_id=d.id group by d.name;"
+docker exec $P psql -U cognee -d cognee_db -tAc \
+  'select count(*) from "SessionQAVector_text";'    # if non-zero, truncate it
+```
+
+**What is lost.** Everything, deliberately — including the 517 records the
+triage in `cognee-corpus-shape.md` had marked as keeps, and the five records
+Claude Desktop had written. The JSON backups make a re-ingest possible at
+roughly 1.3 hours for ~520 records, but no re-seed is planned.
+
 ### Retiring the container-wide `COGNEE_*` variables
 
 Four variables are set container-wide in Coolify. Measured 2026-09-26, **three

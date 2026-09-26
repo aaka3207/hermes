@@ -169,6 +169,12 @@ for real. The loop closes without anyone deciding it should.
    config key for it exists (§4.5).
 
 Sequencing matters: 2 before 1, or the wipe refills from the next session end.
+Runbook in `cognee-operations.md` §9, "Wiping the store and starting clean".
+
+**No re-seed.** Decided 2026-09-26: the 517 records the triage kept are not
+worth reinstating either. Both populations are backed up to JSON first — the
+documents, and the `SessionQAVector_text` session turns, which the older
+document backup never captured.
 
 **Not yet settled** — whether a short tagged pointer record retrieves better
 than the prose one that worked in §4.3. Eleven seed records are staged and
