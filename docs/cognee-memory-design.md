@@ -572,3 +572,73 @@ so for it the id is an opaque token — evidence that provenance exists, not
 access to it. The rule in §11 stands: anything Claude must actually be able to
 read belongs in the record text or on a Notion page, not behind a session
 pointer.
+
+## 13. Attribution: who wrote this
+
+The third axis, alongside the two pointer directions in §12. Measured
+2026-09-26; it is available at every tier, but by three different mechanisms
+and with one real gap.
+
+| tier | mechanism | status |
+|---|---|---|
+| 2 LCM | `messages.source` column | **free, but it names the surface, not the agent** |
+| 3 shared store | ledger columns are NULL → text prefix | **convention only, and only one agent follows it** |
+| 4 Notion | `created_by` / `last_edited_by` | **free for Hermes; Claude is invisible** |
+
+### Tier 2 — populated, but answering a different question
+
+`source` is set on all 21,335 messages and is genuinely useful:
+
+```
+desktop 13068 · discord 3990 · photon 1737 · tui 1003
+subagent 770 · cron 574 · curator 149 · cli 34 · api_server 10
+```
+
+But these are **Hermes channels**, not agents — `desktop` is the Hermes
+desktop UI, not Claude Desktop. It distinguishes *interactive from cron from
+subagent*, which matters (it is how the operational-text problem in §9 could be
+caught automatically), but it never says "Claude wrote this", because Claude
+does not write here at all.
+
+### Tier 3 — nothing native, and a half-adopted convention
+
+Cognee's ledger columns (`source_user`, `source_pipeline`, `source_task`,
+`source_node_set`, `ontology_uri`, `valid_to`) were NULL on 30 of 30 sampled
+records. Attribution has to live in the record text.
+
+In practice one agent already does this: Claude Desktop prefixes
+`[claude-desktop]`, and the retired importer prefixed `[mnemosyne]`. **Hermes
+prefixes nothing.** So today an untagged record means "probably Hermes, or
+possibly anything" — which is not attribution. Making Hermes tag its writes is
+a one-line prompt change and closes this.
+
+### Tier 4 — the gap
+
+Across the 100 most recently edited pages there are exactly **two** actors:
+
+* `Hermes` — type `bot`, 81 created / 85 last-edited
+* `Ameer Akashe` — type `person`, 19 created / 15 last-edited
+
+**Claude Desktop does not appear.** Its Notion connector authenticates as the
+user over OAuth rather than as its own integration, so its writes are recorded
+under the person account. Given the user does not hand-edit Notion, most of
+those 19 pages are Claude's — but nothing in the API distinguishes a page
+Claude created from one the user created.
+
+So "Claude wrote this page" is **not recoverable from Notion metadata**, and
+any design that assumes it is will be quietly wrong. Two ways out, neither
+free: give Claude its own Notion integration token instead of the OAuth
+connector, or have Claude stamp authorship into the page itself (a property or
+a first line) as a convention — the tier-3 approach, applied one tier up.
+
+### Why this matters for conflict resolution
+
+§2's rule is *most recent wins, and say so*. Attribution makes "say so" mean
+something: **"Claude wrote this on the 7th; you told me otherwise on the 19th"**
+is a resolvable statement, where two undated unattributed claims are not.
+Combined with §12's session pointer, the agent can name the writer, the date,
+and the conversation. That is the full answer to the original complaint —
+colliding Notion state with things said directly and not knowing which is true.
+
+It works at three of the four corners today. The missing corner is Claude's
+Notion authorship, and it needs a convention rather than a query.
