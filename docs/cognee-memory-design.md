@@ -68,6 +68,41 @@ the read/write routing; §12 the pointers; §13 attribution.
   as the user, not as a bot. Needs its own integration token or an in-page
   convention (§13).
 
+### Why every provider looks broken in the same way
+
+Four memory providers were examined closely (cognee in use, Mnemosyne retired,
+Honcho and OpenViking researched 2026-09-26). Every serious defect found in any
+of them sits in the **LLM extraction layer**, and none sits in storage:
+
+| provider | where it fails |
+|---|---|
+| cognee | cognify builds an unusable graph; completions corrupt names and dates |
+| Honcho | the deriver writes its own prompt's examples into facts about the user |
+| OpenViking | extraction drops, merges and deletes records |
+| Mnemosyne | the consolidation cycle produced nothing, then froze |
+
+The inverse also holds. Each one's plain read path works: cognee's `CHUNKS`,
+Honcho's verbatim row search with a literal-substring branch for identifiers,
+OpenViking's `grep`/`read`, LCM's FTS across 21,335 messages with no vectors
+configured at all.
+
+So the category is not broken; it is **competing on the layer that does not
+work**. Autonomous memory extraction demos well and is unreliable everywhere;
+store-index-return-exactly is reliable everywhere and is nobody's headline.
+
+**Two consequences for this design.** First, provider choice matters less than
+it appears -- if the answer at every provider is *disable the LLM layer and use
+it as a store*, they are near-interchangeable, and the real criterion becomes
+whose failures are loud. OpenViking fails that test badly (config flags
+declared and never read; `ov snapshot commit` broken since 0.4.19 with nightly
+backups failing unnoticed). LCM passes it by being already installed, already
+holding everything, and visibly in the request path.
+
+Second, the convention in this document -- deliberate writes, dated assertions,
+explicit pointers, verbatim reads, a cron that consolidates -- is doing by hand
+what these products automate badly. On the evidence that is not a workaround;
+it is the correct architecture.
+
 ### Traps that already cost time
 
 * `auto_route: false` makes recall **worse** -- it hardcodes `GRAPH_COMPLETION`.
