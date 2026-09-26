@@ -519,3 +519,56 @@ The observed failure in §5.3 was a routing failure, not a storage failure: the
 agent answered a tier-3 question ("who is this person") out of tier 2, then
 reported it as a stored memory. Both halves were wrong — the wrong layer, and a
 provenance claim it had not checked. Rule 4 and rule 1 exist for exactly that.
+
+## 12. Tier 3 points in two directions
+
+Tier 3 is not only an index of Notion pages. A record can also carry the
+**Hermes session id** of the conversation where the fact was stated, which
+makes tier 2 dereferenceable from tier 3.
+
+| pointer on a tier-3 record | resolves to | answers |
+|---|---|---|
+| Notion page id | tier 4 | what is true *now* |
+| Hermes session id | tier 2 | what was *actually said*, verbatim, and when |
+
+Together they give a record both a current-state destination and a provenance
+destination, and neither has to be duplicated into the record itself.
+
+**SOUL.md already requires this.** Its standing instruction is to obtain and
+confirm the originating session id through the LCM tool before storing a
+memory, to include that verified id, and — explicitly — never to infer or
+invent one: if LCM cannot confirm it, the memory must not be stored as though
+provenance were verified. The convention predates this design; what it lacked
+was a stated reason and a verified resolution path.
+
+### The join is real (verified 2026-09-26)
+
+Three spellings are in play, and they do reconcile:
+
+* `lcm.db.messages.session_id` holds the bare Hermes id, e.g.
+  `20260926_152622_5bfbb3`. 130 of 132 sessions use this shape; 2 do not.
+* the cognee session id is `hermes_` + that same string
+  (`_build_cognee_session_id`).
+* stripping the prefix and querying `messages` returns the real rows — tested
+  against a live session, 32 messages found.
+
+So the chain **tier-3 record → session id → `lcm_load_session` → exact raw
+transcript, paginated** works today with no new plumbing. `lcm_expand` with a
+`store_id` narrows it to a single message, and `include_exact_ref=true` yields
+a citable span.
+
+### What this is good for
+
+It resolves the conflict case properly. When a tier-3 assertion disagrees with
+a Notion page, the agent can do more than compare dates: it can open the
+conversation the assertion came from and read what was actually said, in
+context, before deciding. That is the difference between *most recent wins*
+and *most recent wins, and say so* — §2's rule, with the evidence to back it.
+
+### The limit worth stating
+
+**Only Hermes can dereference a session id.** Claude Desktop has no LCM tools,
+so for it the id is an opaque token — evidence that provenance exists, not
+access to it. The rule in §11 stands: anything Claude must actually be able to
+read belongs in the record text or on a Notion page, not behind a session
+pointer.
