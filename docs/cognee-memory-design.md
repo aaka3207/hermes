@@ -14,6 +14,69 @@ example it is described by shape, not quoted.
 
 ---
 
+## 0. Start here
+
+The sections below were written in order during one long session, so they read
+as a narrative. This is the state they arrived at. **§9-13 supersede §3 where
+they disagree** -- §3 describes two tiers and the real answer is four.
+
+### The architecture
+
+| tier | store | holds | both agents? |
+|---|---|---|---|
+| 1 | `memories/MEMORY.md`, `USER.md` | how *this agent* should behave | Hermes only |
+| 2 | `hermes-lcm` (`/opt/data/lcm.db`) | everything ever said, losslessly | Hermes only |
+| 3 | shared store (cognee today) | user facts every agent needs | both |
+| 4 | Notion | durable current state | both |
+
+Tier 3 records are **dated assertions that are never edited**, carrying up to
+two pointers: a Notion page id (what is true now) and a Hermes session id (what
+was actually said). Tier 4 pages are mutable and win on current state. §11 has
+the read/write routing; §12 the pointers; §13 attribution.
+
+### Done on 2026-09-26
+
+* Store wiped to empty and backed up (834 records + 247 session turns + 33
+  session records, as JSON on the host). No re-seed.
+* `improve_on_end: false` on the personal profile; gateway restarted.
+* `TELEMETRY_DISABLED=1` on the cognee service.
+* Retrieval verified working from empty at one, two and four words.
+
+### The three things to actually do next, in order
+
+1. **Sort `MEMORY.md`.** It currently mixes all four tiers. Nothing downstream
+   can be specified until tier 1 has a boundary (§9).
+2. **Update both prompts** with the §11 routing, and make every recall pass
+   `scope: "graph"` **and** `search_type: "CHUNKS"`. Neither has a config
+   default, so an agent that forgets them gets the broken behaviour (§4.5,
+   §5.3). Also: make Hermes tag its tier-3 writes, and fix SOUL.md's dead
+   instruction to write to Mnemosyne.
+3. **Then** build the consolidation cron. Not before -- it has nothing correct
+   to act on until step 2 lands.
+
+### Open decisions
+
+* **Whether to keep cognee at all.** Its graph was measured near-useless and
+  retrieval rides on embeddings plus the LLM
+  (`cognee-graph-analysis.md` §6). Candidates researched 2026-09-26 in
+  `claudedocs/research_honcho_20260926.md` and
+  `claudedocs/research_openviking_20260926.md`. **Cheapest experiment first:**
+  `LCM_ASSERTIONS_ENABLED` and `LCM_EMBEDDINGS_ENABLED` are two environment
+  variables on a plugin already installed and already serving every session
+  (§10).
+* **Claude's Notion authorship is not recoverable** from the API -- it writes
+  as the user, not as a bot. Needs its own integration token or an in-page
+  convention (§13).
+
+### Traps that already cost time
+
+* `auto_route: false` makes recall **worse** -- it hardcodes `GRAPH_COMPLETION`.
+* Completion modes corrupt names and dates even on a clean store. Anything
+  acted on must come back verbatim.
+* `score` is a **distance**; a `> threshold` filter inverts the ranking.
+* `/api/v1/forget` does not clear `SessionQAVector_text`.
+* `improve_on_end: false` does **not** stop per-turn session writes.
+
 ## 1. The problem, stated properly
 
 Memory had been treated as one thing. It is at least four, and they fail
