@@ -42,15 +42,23 @@ the read/write routing; §12 the pointers; §13 attribution.
 * `TELEMETRY_DISABLED=1` on the cognee service.
 * Retrieval verified working from empty at one, two and four words.
 
+### Done on 2026-09-27
+
+* The plugin now installs from a fork, which turns the two recall levers into
+  config keys and gives the per-turn session write a switch. Two of the four
+  problems were already fixed upstream. **§14** has the detail; it supersedes
+  §4.5 and §5.3 where they say no config default exists.
+
 ### The three things to actually do next, in order
 
 1. **Sort `MEMORY.md`.** It currently mixes all four tiers. Nothing downstream
    can be specified until tier 1 has a boundary (§9).
-2. **Update both prompts** with the §11 routing, and make every recall pass
-   `scope: "graph"` **and** `search_type: "CHUNKS"`. Neither has a config
-   default, so an agent that forgets them gets the broken behaviour (§4.5,
-   §5.3). Also: make Hermes tag its tier-3 writes, and fix SOUL.md's dead
-   instruction to write to Mnemosyne.
+2. **Update both prompts** with the §11 routing. Also: make Hermes tag its
+   tier-3 writes, and fix SOUL.md's dead instruction to write to Mnemosyne.
+   **The two recall arguments are no longer part of this step** -- see §14.
+   `search_type` is now a config key and `scope` is gone, so an agent that
+   forgets them gets the right behaviour rather than the broken one. The
+   prompts still need the routing; they no longer carry the correctness.
 3. **Then** build the consolidation cron. Not before -- it has nothing correct
    to act on until step 2 lands.
 
@@ -237,6 +245,11 @@ is sent as `GRAPH_COMPLETION` — the **worst** performer measured. Turning the
 config switch off makes recall worse, not better. There is no config key for a
 default search type; `search_type` exists only as a per-call tool argument.
 
+> **Superseded 2026-09-27 (§14).** The last sentence no longer holds: the
+> forked plugin adds a `search_type` config key. The first three sentences
+> still do — `auto_route: false` remains a trap, and the fork deliberately did
+> not change that behaviour, only named the constant behind it.
+
 ### 4.6 Two smaller findings
 
 * **`score` is a distance, not a similarity.** The correct hit scored 0.466,
@@ -267,7 +280,10 @@ for real. The loop closes without anyone deciding it should.
    and it is an instruction to the agent rather than a config edit, because no
    config key for it exists (§4.5). §5.2 raises the stakes on this one: on a
    clean store the completion modes still corrupt names and dates, so CHUNKS is
-   the only mode safe for anything an agent will act on.
+   the only mode safe for anything an agent will act on. **As of 2026-09-27 this
+   is a config edit after all — see §14.** The reasoning stands; only the
+   delivery mechanism changed, and for the better: a config default cannot be
+   forgotten by a caller.
 
 Sequencing matters: 2 before 1, or the wipe refills from the next session end.
 Runbook in `cognee-operations.md` §9, "Wiping the store and starting clean".
@@ -384,6 +400,12 @@ search_type: "CHUNKS"   # verbatim records, no completion paraphrase
 
 Both are per-call tool arguments (`schemas.py` `RECALL_SCHEMA`). Neither has a
 config default, so neither survives an agent that forgets to pass them.
+
+> **Both halves of that are fixed as of 2026-09-27 (§14).** `scope` is gone —
+> upstream deleted `_recall_scope_params`, and recall now targets the graph
+> unconditionally. `search_type` has a config default in the forked plugin. The
+> measurement above stands; what changed is that it no longer depends on an
+> agent remembering anything.
 
 ## 5.4 Order of work
 
@@ -740,3 +762,49 @@ colliding Notion state with things said directly and not knowing which is true.
 
 It works at three of the four corners today. The missing corner is Claude's
 Notion authorship, and it needs a convention rather than a query.
+
+---
+
+## 14. What the plugin fork changed, 2026-09-27
+
+§4 diagnosed the failure as a *search-type* problem rather than a data problem,
+and §5 could only answer it by instructing the agent, because the levers were
+per-call tool arguments with no config defaults. That was the last unresolved
+piece: an instruction an agent can forget is not a fix, and the per-turn write
+had no switch at any level.
+
+The plugin is pip-installed from a git pin, so a site-packages patch does not
+survive a rebuild. Forking it was therefore a one-line change to the install
+URL, which is what was done: `aaka3207/cognee-integrations`, branch
+`hermes/recall-defaults`, pinned by sha in the Dockerfile.
+
+**Two of the four problems turned out to be already fixed upstream.** The fork
+is a clean sync of upstream `main`, 56 commits past what the image had pinned,
+and those commits include:
+
+| §  | problem | outcome |
+|---|---|---|
+| 4.4, 5.3 | recall reads the session cache via `scope: auto` | **gone.** `_recall_scope_params` deleted; recall targets `["graph"]` unconditionally, and a `scope` argument from an older caller is ignored. |
+| — | the plugin pinned `cognee==1.5.4` against a 1.6.0 backend | **closed.** Plugin 1.3.0 pins `cognee==1.6.0`. |
+
+**Two needed writing.** Both default to today's behaviour, so nothing changes
+until the key is set:
+
+| §  | problem | key |
+|---|---|---|
+| 4.2, 4.5, 5.2 | no config default for `search_type`, so a forgetful caller gets an LLM completion that paraphrases identifiers | `search_type` |
+| 5.3 | `sync_turn` writes every turn to the session cache with no switch; `improve_on_end: false` is not one | `session_writes` |
+
+Plus the `memory.txt` upload-name fix (upstream #436), moved out of the
+in-image patch and into the plugin's own source, and the `GRAPH_COMPLETION`
+literal behind `auto_route: false` given a name. §4.5 stays true: `auto_route:
+false` is still a trap, deliberately unchanged.
+
+**What this does not fix.** The graph is still what `cognee-graph-analysis.md`
+§6 measured — 78% singleton entities, 2,273 predicates. Retrieval still rides
+on the embeddings and the extraction LLM. That is the open decision in §0, and
+this work does not settle it; it makes the store behave predictably enough that
+the decision can be made on evidence rather than on noise.
+
+Operational detail — the config keys, the pin, the guard script — is in
+`cognee-operations.md` §5 and §7.

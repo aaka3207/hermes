@@ -704,9 +704,10 @@ Assistant weight sync, the Hevy weekly report, the Career Hub reminder. With
 * `hermes_memory_provider/__init__.py:1670` — `_read_config_key` reads
   `memory.mnemosyne.<key>`, hardcoded to that subtree.
 * `cognee_integration_hermes/provider.py` advertises `service_url`, `api_key`,
-  `llm_api_key`, `llm_model`, `dataset`, `auto_route`, `improve_on_end`. The
-  upstream docs list 17 `COGNEE_*` variables in total. None of them filters
-  content, and nothing in the package does.
+  `llm_api_key`, `llm_model`, `dataset`, `auto_route`, `improve_on_end`, and —
+  in the fork — `search_type` and `session_writes`. The upstream docs list 17
+  `COGNEE_*` variables in total. None of them filters content, and nothing in
+  the package does.
 
 Three unfiltered write lanes, all in `provider.py`, all gated only on
 *usable / not-a-subagent / breaker-closed*:
@@ -727,7 +728,16 @@ moves the pin to cognee 1.6.0 and stops *reading* session scopes, but its
 changelog is explicit that "sessions are still written and still promoted into
 the graph by `improve()`". Writing is untouched.
 
-**No upstream issue exists.** The fix is a patch to the three lanes in
+**Partly addressed 2026-09-27.** Two of the three lanes now have a switch:
+`session_writes: false` in the profile's cognee.json stops `sync_turn`, and
+`on_delegation` routes through it, so it is covered too. That is a blunt
+instrument, not the content filter this section is about — it turns the lane
+off rather than deciding per write. `on_memory_write` is deliberately left
+alone, since mirroring an explicit memory-tool write is the intent.
+
+There is still **no write-time content filter, and no upstream issue for one.**
+The switch lives in the fork (`aaka3207/cognee-integrations`, see the pin note
+in this section); a real filter would be a further patch to
 `cognee_integration_hermes`, or a feature request at
 `github.com/topoteretes/cognee-integrations` (`integrations/hermes-agent/`,
 Apache-2.0). Mnemosyne also ships a `write_classifier` in
