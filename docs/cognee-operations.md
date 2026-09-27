@@ -621,6 +621,36 @@ docker exec <hermes container> sh -c \
   "grep -E '^Requires-Dist: cognee' /opt/hermes/.venv/lib/python3.13/site-packages/cognee_integration_hermes_agent-*.dist-info/METADATA"
 ```
 
+**Bumping the pin: exempt the transitive exact pins from `exclude-newer`, not
+just cognee.** The base image sets `exclude-newer = "14 days"`
+(`/opt/hermes/pyproject.toml`), and a freshly released cognee sits inside that
+window, so the Dockerfile carries a scoped `--exclude-newer-package` for it.
+That is not sufficient on its own: cognee holds exact pins of its own, and a
+recent one falls outside the window too. `cognee==1.6.0` pins
+`enola-cli==0.4.21`, released the same day, and the failure **names the
+transitive package**, which reads like a broken dependency rather than a date
+wall:
+
+```
+Because there is no version of enola-cli==0.4.21 and cognee==1.6.0
+depends on enola-cli==0.4.21, we can conclude that cognee==1.6.0 cannot be used.
+```
+
+So each such pin needs its own `--exclude-newer-package` line. Find them before
+building, by resolving against a simulated wall rather than discovering it in a
+15-minute image build:
+
+```bash
+uv pip install --python /tmp/probe/bin/python --no-cache --dry-run \
+  --exclude-newer "$(date -u -v-14d +%Y-%m-%dT00:00:00Z)" \
+  --exclude-newer-package "cognee=<release date + 1>" \
+  "cognee-integration-hermes-agent @ git+<the pin>#subdirectory=integrations/hermes-agent" \
+  "packaging==26.0"
+```
+
+Check the output for `packaging==26.0` surviving and for any downgrade — that is
+what the `packaging` argument on the real install exists to catch.
+
 **Symptom, 2026-09-21 to 2026-09-23: every Hermes memory write 409'd while
 everything else looked healthy.** `HttpBackend._remember` uploaded every
 permanent memory under the fixed filename `memory.txt`. cognee 1.6.0 stopped

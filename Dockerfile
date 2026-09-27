@@ -871,6 +871,19 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 #      (deploy/cognee-selfhost.compose.yaml) -- the plugin and the server now
 #      agree, which they had not since the backend moved to 1.6.0.
 #
+#      **One exemption is not enough: exempt the transitive exact pins too.**
+#      cognee==1.6.0 depends on `enola-cli==0.4.21`, released 2026-09-18, also
+#      inside the window -- so exempting `cognee` alone still fails, and the
+#      message names enola-cli rather than cognee, which is easy to misread as
+#      a broken dependency:
+#          "Because there is no version of enola-cli==0.4.21 and cognee==1.6.0
+#           depends on enola-cli==0.4.21, we can conclude that cognee==1.6.0
+#           cannot be used."
+#      Any exact pin cognee holds on a package released inside the window needs
+#      its own line. Verified by a dry-run resolve against a simulated 14-day
+#      wall before this landed: 143 packages, cognee 1.6.0, limits 5.8.0,
+#      packaging 26.0 -- no downgrade, so guard (3) below still holds.
+#
 # Deliberately NOT `--exclude-newer-package cognee=$(date)`: a fixed date means a
 # future bump to a newer cognee fails this build loudly instead of silently
 # widening the window. Bump the pins together, or not at all.
@@ -926,6 +939,7 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 # (plugins/memory/__init__.py:30), unlike the image ccd1b05da was written for.
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
         --exclude-newer-package "cognee=2026-09-19T00:00:00Z" \
+        --exclude-newer-package "enola-cli=2026-09-19T00:00:00Z" \
         "cognee-integration-hermes-agent @ git+https://github.com/aaka3207/cognee-integrations.git@fd5b7a4971b2634b4b50f4dab999c6d75a2d3265#subdirectory=integrations/hermes-agent" \
         "packaging==26.0" && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py && \
