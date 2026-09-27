@@ -440,6 +440,12 @@ There is a fork of `mnemosyne-oss/mnemosyne` at `aaka3207/mnemosyne`, created
 
 Do not mistake this fork for a live dependency, and do not assume it holds our patches.
 
+**This is about mnemosyne only.** Since 2026-09-27 the cognee Hermes plugin
+*does* build from a fork — `aaka3207/cognee-integrations`, pinned by sha in the
+Dockerfile (see `docs/cognee-operations.md` §7). It is the one git-sourced
+dependency in the image, and unlike this one it carries real patches. Do not
+read "the engine never comes from a git source" as an estate-wide rule.
+
 ---
 
 ## 10. Runbook

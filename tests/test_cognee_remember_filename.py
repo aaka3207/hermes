@@ -19,9 +19,12 @@ Guards:
   4. the fixed "memory.txt" is gone entirely
   5. idempotent -- a second apply is a no-op, not a double patch
   6. anchor moved while memory.txt remains -> exit 1 (refuse to boot)
-  7. upstream fixed (no memory.txt at all) -> exit 0 (do not block)
-  8. plugin absent -> exit 0
-  9. target_path survives a python3.x minor bump
+  7. upstream/fork fixed it properly (content-derived name) -> exit 0
+  8. upstream swapped one fixed name for another -> exit 1. "memory.txt is
+     gone" is not the same as "the bug is fixed": any other fixed name 409s
+     identically, so the absence of the old literal is not enough to pass.
+  9. plugin absent -> exit 0
+ 10. target_path survives a python3.x minor bump
 """
 import importlib.util as u
 import os
@@ -81,13 +84,13 @@ def sent_name(path, text):
     return files["data"][0]
 
 
-print("\n1/9 control: unpatched source collides on one fixed name")
+print("\n1/10 control: unpatched source collides on one fixed name")
 p = write_fixture()
 a, b = sent_name(p, "alpha one"), sent_name(p, "beta two, different")
 check("unpatched sends memory.txt for both", a == b == "memory.txt",
       "%r vs %r" % (a, b))
 
-print("\n2/9 patched source sends distinct names for distinct content")
+print("\n2/10 patched source sends distinct names for distinct content")
 rc = mod.apply(p)
 check("apply() returned 0", rc == 0, "rc=%d" % rc)
 pa, pb = sent_name(p, "alpha one"), sent_name(p, "beta two, different")
@@ -97,13 +100,13 @@ check("both are memory-<hash>.txt",
       and pb.startswith("memory-") and pb.endswith(".txt"),
       "%r, %r" % (pa, pb))
 
-print("\n3/9 byte-identical content keeps one name (the documented no-op)")
+print("\n3/10 byte-identical content keeps one name (the documented no-op)")
 check("same text -> same name", sent_name(p, "alpha one") == pa, pa)
 
-print("\n4/9 the fixed name is gone")
+print("\n4/10 the fixed name is gone")
 check("no memory.txt left in source", '"memory.txt"' not in open(p).read())
 
-print("\n5/9 idempotent")
+print("\n5/10 idempotent")
 rc2 = mod.apply(p)
 check("second apply is a no-op 0", rc2 == 0, "rc=%d" % rc2)
 check("marker appears exactly once",
@@ -111,7 +114,7 @@ check("marker appears exactly once",
       str(open(p).read().count(mod.MARKER)))
 os.unlink(p)
 
-print("\n6/9 anchor moved but memory.txt remains -> refuse")
+print("\n6/10 anchor moved but memory.txt remains -> refuse")
 moved = write_fixture(FIXTURE.replace(
     mod.OLD,
     '        multipart = _multipart_body(fields, {"data": ("memory.txt", '
@@ -120,18 +123,31 @@ rc3 = mod.apply(moved)
 check("returns 1", rc3 == 1, "rc=%d" % rc3)
 os.unlink(moved)
 
-print("\n7/9 upstream fixed -> do not block the boot")
+print("\n7/10 fixed upstream with a content-derived name -> do not block")
 fixed = write_fixture(FIXTURE.replace(
     mod.OLD,
-    '        multipart = _multipart_body(fields, {"data": (_n, _p)})'))
+    '        blob = text.encode("utf-8")\n'
+    '        _n = "memory-%s.txt" % hashlib.sha256(blob).hexdigest()[:16]\n'
+    '        multipart = _multipart_body(fields, {"data": (_n, blob)})'))
 rc4 = mod.apply(fixed)
 check("returns 0", rc4 == 0, "rc=%d" % rc4)
 os.unlink(fixed)
 
-print("\n8/9 plugin absent -> 0")
+print("\n8/10 one fixed name swapped for another -> refuse")
+# The whole point of the positive check. memory.txt is gone, so the old
+# "assume upstream fixed it" branch passed this and shipped the 409 outage.
+renamed = write_fixture(FIXTURE.replace(
+    mod.OLD,
+    '        multipart = _multipart_body(fields, '
+    '{"data": ("memory.md", text.encode("utf-8"))})'))
+rc5 = mod.apply(renamed)
+check("returns 1", rc5 == 1, "rc=%d" % rc5)
+os.unlink(renamed)
+
+print("\n9/10 plugin absent -> 0")
 check("returns 0", mod.apply("/nonexistent/http_backend.py") == 0)
 
-print("\n9/9 target_path survives a python3.x minor bump")
+print("\n10/10 target_path survives a python3.x minor bump")
 tmp = tempfile.mkdtemp()
 deep = os.path.join(tmp, "lib", "python3.99", "site-packages",
                     "cognee_integration_hermes")
