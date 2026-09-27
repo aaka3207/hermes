@@ -48,19 +48,29 @@ the read/write routing; §12 the pointers; §13 attribution.
   config keys and gives the per-turn session write a switch. Two of the four
   problems were already fixed upstream. **§14** has the detail; it supersedes
   §4.5 and §5.3 where they say no config default exists.
+* The prompt layer: tier 1 sorted, `SOUL.md` carrying the §11 routing, and the
+  dead Mnemosyne and GBrain references removed. **§15** has the detail --
+  including the four injected memory layers, two of which were undocumented, and
+  the ~4,500-token block that arrives on every prompt regardless of the prompt.
 
-### The three things to actually do next, in order
+### What is left, in order
 
-1. **Sort `MEMORY.md`.** It currently mixes all four tiers. Nothing downstream
-   can be specified until tier 1 has a boundary (§9).
-2. **Update both prompts** with the §11 routing. Also: make Hermes tag its
-   tier-3 writes, and fix SOUL.md's dead instruction to write to Mnemosyne.
-   **The two recall arguments are no longer part of this step** -- see §14.
-   `search_type` is now a config key and `scope` is gone, so an agent that
-   forgets them gets the right behaviour rather than the broken one. The
-   prompts still need the routing; they no longer carry the correctness.
-3. **Then** build the consolidation cron. Not before -- it has nothing correct
-   to act on until step 2 lands.
+Steps 1 and 2 below are **done** -- see §15, which supersedes them.
+
+1. ~~Sort `MEMORY.md`.~~ Done 2026-09-27: 12 entries to 2. `USER.md` was
+   deliberately *not* sorted; it is tier 1 doing its job, and only two entries
+   were wrong (§15).
+2. ~~Update both prompts with the §11 routing.~~ Done for Hermes `SOUL.md`.
+   **Claude Desktop's prompt is still not updated.**
+3. **Deal with the auto-injected block before the cron.** §15: roughly 4,500
+   tokens land in every prompt from a lane that ignores `search_type`, a third of
+   it prior LLM answers, and one measured block contradicted itself. A
+   consolidation cron has nothing reliable to act on while that is true --
+   the same reason step 3 used to wait on step 2.
+4. **Then** build the consolidation cron.
+5. **Decide what crosses the tier-3 / tier-4 boundary** (§15 "Open"). Tier 3 is
+   specified as pointers, but descriptions of Notion content are being stored
+   too, and they go stale against a mutable tier 4.
 
 ### Open decisions
 
@@ -808,3 +818,140 @@ the decision can be made on evidence rather than on noise.
 
 Operational detail — the config keys, the pin, the guard script — is in
 `cognee-operations.md` §5 and §7.
+
+## 15. The prompt layer, 2026-09-27
+
+Steps 1 and 2 of §0's three-things list are done. This section records what
+changed, and the larger thing found while doing it: **the prompt was never the
+only place memory instructions come from.**
+
+### What shipped
+
+| file | before | after |
+|---|---|---|
+| `memories/MEMORY.md` | 12 entries, 2,163 B, all four tiers mixed | 2 entries, 475 B |
+| `memories/USER.md` | 12 entries, 1,361 B | 11 entries, 1,264 B |
+| `SOUL.md` | one memory layer named, one instruction | §11 read/write routing |
+| `notion-knowledge-capture` / `notion-cli-operations` skills | 4 references routing writes to Mnemosyne | 0 |
+
+Four preferences and two Notion pointers were promoted out of tier 1 into tier 3
+**and verified retrievable before anything was deleted** -- the shared store is
+the only copy now, so the order mattered. Tier 1 gained one standing instruction
+stating its own boundary, so the file records why it must stay small.
+
+Net change to the always-injected prompt: **+226 bytes.** The routing section
+costs 1,914 B more than what it replaced; `MEMORY.md` gave back 1,688 B.
+
+Two dead-system findings, same shape as the Mnemosyne one:
+
+* `SOUL.md` mandated loading `gbrain-knowledge-operations`, which **does not
+  exist** in `/opt/data/skills` (166 skills installed). Career conversations were
+  instructed to load something unloadable. GBrain is retired; all references
+  removed, and no replacement retrieval layer was invented, so career now
+  specifies only its hub and SOP. **That is a real gap, not a fix.**
+* Cron `e4a9af1d3ed2`, "Career Hub -> GBrain migration dry-run report", was still
+  enabled on `0 9 * * 1`, producing output as late as 2026-09-21.
+
+A prompt that names a missing skill fails *silently* -- the agent simply cannot
+comply. Retiring a system means grepping the injected prompt, the tier-1 files,
+the skills tree and `cron/jobs.json`, not just the code. A check that every
+backticked skill name in `SOUL.md` resolves under `/opt/data/skills` is cheap and
+found this one.
+
+### There are four injected memory layers, not two
+
+This is the part that matters more than the sort. Asked whether Hermes also has
+automatic injection alongside the instructed `cognee_recall`, the answer is yes,
+and two of the layers were undocumented here:
+
+1. `provider.system_prompt_block()` -- static `# Cognee Memory`: mode, dataset,
+   tool list, plus a **memory steer** (`memory_steer: True`, `memory_steer_text`
+   empty so the built-in text is live).
+2. `provider.prefetch()` / `_run_layered_prefetch` -- dynamic `## Cognee Memory`,
+   **once per prompt**, background thread, 20s budget.
+3. `SOUL.md`'s own section.
+4. `memories/MEMORY.md` + `USER.md`.
+
+Measured for one query, the injected block's `text` was **17,830 characters,
+about 4,500 tokens**:
+
+| span | content |
+|---|---|
+| 0 - 5,454 (31%) | `Previous conversation:` -- 13 QUESTION/ANSWER pairs, only 9 distinct |
+| 5,454 - 16,247 | retrieved context |
+| 16,247+ | session guidance |
+
+For a question about strength-training progression, the history layer carried
+seven unrelated prior questions, including one about Kubernetes ingress
+configuration, and repeated one topic three times. **One block contained two
+different creation dates for the same page** -- those are prior LLM *answers*,
+not stored text.
+
+Three mechanisms worth keeping:
+
+* `_run_layered_prefetch` hardcodes `query_type="HYBRID_COMPLETION"`,
+  `scope=["graph"]`, `only_context=True`. **It ignores `search_type`.** The
+  CHUNKS default from §14 governs the `cognee_recall` tool and not the always-on
+  lane. `only_context=True` does skip the LLM, so the *retrieved* span is
+  verbatim -- the history layer is not.
+* **`session_writes: false` stopped the writes, not the reads.**
+  `SessionQAVector_text` is still 43 and `session_records` 12, and the
+  QUESTION/ANSWER shape matches `remember_session`'s payload exactly. They
+  survived the 2026-09-26 wipe because `/api/v1/forget` is dataset-scoped and
+  these are session-keyed.
+* The **steer contradicts `SOUL.md`**: it says store durable knowledge "through
+  the cognee tools rather than Hermes' built-in memory", while `SOUL.md` routes
+  behaviour notes to `memories/MEMORY.md`. Two layers, opposite instructions.
+
+Consequently `SOUL.md`'s instruction to call `cognee_recall` at conversation
+start does not duplicate the auto-block, it **diverges** from it: the tool
+returns five CHUNKS rows of verbatim stored text, the lane returns one
+HYBRID_COMPLETION item roughly twice the size, a third of it prose. Same
+question, two answers, no signal to the agent about why.
+
+**Draining the session tables is not the fix.** It was recommended as the
+cheapest win and then withdrawn: it was never established that the history layer
+comes from those tables rather than from the graph, where months of cognified
+conversational answers already live. The block returned history even with
+`session_id=""`. The real levers are the lane's hardcoded search type and its
+`top_k`, which means a fork commit, not a one-time delete.
+
+The verbatim rule in `SOUL.md` was corrected the same day for this reason. As
+first written it said "recall returns stored text", which licenses exactly the
+mistake it exists to prevent. It now names its source: `cognee_recall` returns
+stored text, the auto-injected block is a hint about what to check, and
+identifiers must be confirmed before use.
+
+### One bug introduced and fixed
+
+The two Notion pointer records were first written with a truncated URL: the
+extraction regex was non-greedy and terminated on the first `.`, which in a
+`app.notion.so` host is three characters in. Both records stored a bare scheme
+and host fragment. **The verification passed** because it asserted only that
+`https://` appeared somewhere -- weak enough to be satisfied by the broken value.
+
+Rewritten from the pre-trim backup with an assertion requiring a `notion.so`
+host *and* a 32-hex page id. Storage is verified; recall had not returned them
+within five minutes, where the original six were retrievable instantly, and
+`dataset_pipeline_status` returns empty. Unresolved.
+
+The lesson is about the assertion, not the regex: a check that cannot fail on the
+bug you are guarding against is not a check. A pointer record with no resolvable
+URL is worse than no record, because it reads as usable.
+
+### Open
+
+* **What actually crosses the tier-3 / tier-4 boundary.** Unresolved, and it is
+  the likely source of the contradictory dates. Tier 3 is specified here as
+  pointers plus dated assertions, but at least one record written by Claude
+  Desktop embeds a *description* of a Notion page's content and its creation
+  date, and `notion-cli-operations/SKILL.md:111` instructs exactly that ("record
+  its exact Notion URL and a concise description in durable memory"). Copied
+  descriptions go stale against a mutable tier 4, and stale copies are what the
+  injected history layer then repeats. Needs a decision: pointer-only, or
+  pointer-plus-description with an explicit staleness rule.
+* The lane's hardcoded `HYBRID_COMPLETION` and `top_k` -- a fifth fork commit.
+* Reconciling the memory steer with `SOUL.md`, or disabling it
+  (`memory_steer: false`).
+* Whether the rewritten pointer records ever become recallable.
+* Career has no retrieval layer specified since GBrain was removed.
