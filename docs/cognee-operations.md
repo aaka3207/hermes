@@ -606,7 +606,7 @@ how the mismatch below was found, and the check is still the right habit even
 though the mismatch is now closed.
 
 **Resolved 2026-09-27.** The pin moved to the fork
-(`aaka3207/cognee-integrations`, branch `hermes/recall-defaults`), which is
+(`aaka3207/cognee-integrations`, its `main` after PR #1), which is
 upstream plugin **1.3.0** and declares **`cognee==1.6.0`** — the same version
 the backend runs. Plugin and server now agree. Historically:
 `cognee-integration-hermes-agent` 1.2.2 declared `cognee==1.5.4` while we ran

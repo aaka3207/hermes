@@ -896,9 +896,14 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 # null-guard and the mnemosyne patches above still hold.
 #
 # Installed from a FORK, not from PyPI and not from upstream. The fork is
-# `aaka3207/cognee-integrations`, branch `hermes/recall-defaults`, pinned to a
-# full commit sha. It is upstream `main` (plugin 1.3.0) plus four commits, none
-# of which changes behaviour until a config key is set:
+# `aaka3207/cognee-integrations`, pinned to a full commit sha on its `main`
+# (PR #1, squash-merged). Pin the merged commit, not the topic branch's tip: the
+# squash orphans that tip, and an orphaned sha is fetchable only until GitHub
+# garbage-collects it. The subtree was compared before repinning -- the squashed
+# `integrations/hermes-agent` tree is byte-identical to the branch tip's.
+#
+# The fork is upstream `main` (plugin 1.3.0) plus four commits, none of which
+# changes behaviour until a config key is set:
 #
 #   1. `_remember` derived its upload filename from the content instead of
 #      uploading every memory as `memory.txt`. That fixed name makes cognee
@@ -940,7 +945,7 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
         --exclude-newer-package "cognee=2026-09-19T00:00:00Z" \
         --exclude-newer-package "enola-cli=2026-09-19T00:00:00Z" \
-        "cognee-integration-hermes-agent @ git+https://github.com/aaka3207/cognee-integrations.git@fd5b7a4971b2634b4b50f4dab999c6d75a2d3265#subdirectory=integrations/hermes-agent" \
+        "cognee-integration-hermes-agent @ git+https://github.com/aaka3207/cognee-integrations.git@959ec5485278149dd5ba4449fd50eef4c09097d9#subdirectory=integrations/hermes-agent" \
         "packaging==26.0" && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-remember-filename.py
