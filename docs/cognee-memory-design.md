@@ -63,9 +63,11 @@ Steps 1 and 2 below are **done** -- see §15, which supersedes them.
 2. ~~Update both prompts with the §11 routing.~~ Done for Hermes `SOUL.md`.
    **Claude Desktop's prompt is still not updated.**
 3. **Deal with the auto-injected block before the cron.** §15: roughly 4,500
-   tokens land in every prompt from a lane that ignores `search_type`, a third of
-   it prior LLM answers, and one measured block contradicted itself. A
-   consolidation cron has nothing reliable to act on while that is true --
+   tokens land in every prompt, a third of it prior LLM answers, and one
+   measured block contradicted itself. The block's shape is upstream design
+   (§15, "Correction, 2026-09-29"); what is wrong is the history it carries, and
+   where that history comes from is not yet established. Find the source first.
+   A consolidation cron has nothing reliable to act on while that is true --
    the same reason step 3 used to wait on step 2.
 4. **Then** build the consolidation cron.
 5. **Decide what crosses the tier-3 / tier-4 boundary** (§15 "Open"). Tier 3 is
@@ -916,6 +918,22 @@ conversational answers already live. The block returned history even with
 `session_id=""`. The real levers are the lane's hardcoded search type and its
 `top_k`, which means a fork commit, not a one-time delete.
 
+**Correction, 2026-09-29: the hardcoded search type is upstream design, not a
+lever.** The plugin CHANGELOG (SDK-741, cognee #5085) and the comment at
+`config.py:242` state it outright: on cognee 1.6.0 only a *completion* search
+type with `only_context=True` returns the prompt-shaped item -- session history,
+then retrieved context, then guidance -- and the lane exists to inject that item
+verbatim. `CHUNKS` returns rows, not that item, so making the lane honour
+`search_type` would break it rather than fix it. The history layer is intended
+too; the CHANGELOG concedes nothing can tell it apart from the retrieved
+knowledge. There is also no config key to turn the lane off: `prefetch()` gates
+only on `_is_usable()` and the circuit breaker.
+
+What remains a defect is the *content* of the history layer -- stale prior
+answers presented as memory -- and its source is still the open question above:
+the session tables, or conversational answers already cognified into the graph.
+That has to be established before anything is deleted or patched.
+
 The verbatim rule in `SOUL.md` was corrected the same day for this reason. As
 first written it said "recall returns stored text", which licenses exactly the
 mistake it exists to prevent. It now names its source: `cognee_recall` returns
@@ -950,7 +968,10 @@ URL is worse than no record, because it reads as usable.
   descriptions go stale against a mutable tier 4, and stale copies are what the
   injected history layer then repeats. Needs a decision: pointer-only, or
   pointer-plus-description with an explicit staleness rule.
-* The lane's hardcoded `HYBRID_COMPLETION` and `top_k` -- a fifth fork commit.
+* ~~The lane's hardcoded `HYBRID_COMPLETION` and `top_k` -- a fifth fork
+  commit.~~ Withdrawn 2026-09-29: the search type is upstream design (see the
+  correction above). Replaced by: **where does the injected history come
+  from** -- session tables or the graph?
 * Reconciling the memory steer with `SOUL.md`, or disabling it
   (`memory_steer: false`).
 * Whether the rewritten pointer records ever become recallable.
