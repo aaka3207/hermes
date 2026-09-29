@@ -354,13 +354,14 @@ Personal profile `/opt/data/cognee.json`:
   "search_type": "CHUNKS",
   "service_url": "https://cognee.aakashe.org",
   "session_writes": false,
+  "write_metadata": true,
   "api_key": "<the minted Cognee API key>"
 }
 ```
 
-`search_type` and `session_writes` exist only in the forked plugin (see §7,
-"The plugin pins an older cognee than we run"). Both matter more than they
-look:
+`search_type`, `session_writes` and `write_metadata` exist only in the forked
+plugin (see §7, "The plugin pins an older cognee than we run"). All three
+matter more than they look:
 
 * **`search_type: "CHUNKS"`** returns the stored text. Without it the server's
   query classifier routes a short query to an LLM completion over the graph,
@@ -374,6 +375,15 @@ look:
   `improve_on_end: false` does not: it governs only promotion into the
   permanent dataset at session end. With `improve_on_end` already off, both
   session tables truncated to zero refilled within five minutes of normal use.
+* **`write_metadata: true`** attaches cognee `external_metadata` to every
+  permanent write: `created_at`, `created_by` (the `created_by` key, default
+  `"hermes"`), `write_origin` (`cognee_remember` or `hermes_memory_tool`) and
+  `hermes_session_id`. It also offers `cognee_remember` an optional flat
+  `metadata` object. A `notion_page_id` key there must hold a real page id or
+  the write is refused -- the one fork-only check. On cognee >= 1.6.1 the
+  metadata is copied onto the chunks, and `cognee_recall` returns it as
+  `metadata` on each `CHUNKS` result. Completion modes do not show it.
+  Records written before the key was set carry none.
 
 Flip the provider in `/opt/data/config.yaml` (`memory.provider: cognee`) and
 add `cognee` to `plugins.enabled`, then restart the personal gateway alone:
@@ -644,7 +654,8 @@ how the mismatch below was found, and the check is still the right habit even
 though the mismatch is now closed.
 
 **Resolved 2026-09-27.** The pin moved to the fork
-(`aaka3207/cognee-integrations`, its `main` after PR #1), which is
+(`aaka3207/cognee-integrations`, its `main` after PR #1; since 2026-09-29 after
+PR #3, sha `32bb76b`), which is
 upstream plugin **1.3.0** and declares **`cognee==1.6.0`** — the same version
 the backend ran until 2026-09-29. The backend is now 1.6.1 and the plugin
 still declares 1.6.0; that skew is harmless, because the plugin reaches the
@@ -771,7 +782,8 @@ Assistant weight sync, the Hevy weekly report, the Career Hub reminder. With
   `memory.mnemosyne.<key>`, hardcoded to that subtree.
 * `cognee_integration_hermes/provider.py` advertises `service_url`, `api_key`,
   `llm_api_key`, `llm_model`, `dataset`, `auto_route`, `improve_on_end`, and —
-  in the fork — `search_type` and `session_writes`. The upstream docs list 17
+  in the fork — `search_type`, `session_writes`, `write_metadata` and
+  `created_by`. The upstream docs list 17
   `COGNEE_*` variables in total. None of them filters content, and nothing in
   the package does.
 
@@ -1156,6 +1168,35 @@ profile already doing it, and only *deletes* from `.env`.
 ---
 
 ## 10. Current live state
+
+### Write metadata turned on, 2026-09-29
+
+Hermes redeployed with the plugin pinned at fork `32bb76b` (hermes #40), then
+`"write_metadata": true` added to the personal `/opt/data/cognee.json` (backup
+beside it, `cognee.json.bak-20260929`) and the container restarted. `dinefile`
+is untouched.
+
+- The loaded config reads back `write_metadata: true`, `created_by: hermes`,
+  `search_type: CHUNKS`.
+- The first real write after it, at 16:20:59Z, carries the metadata in the
+  `data` row: `created_at`, `created_by: hermes`,
+  `write_origin: cognee_remember`, `hermes_session_id`. Earlier rows carry
+  only cognee's own `_cognee.source_uri`. Checked with
+  `select created_at, name, external_metadata from data order by created_at desc limit 3`
+  in `cognee_db`. The chunk copy lives in the per-dataset database and was
+  not checked directly.
+- `SOUL.md` (`/opt/data`, not in this repo) gained two edits, each backed up
+  beside it:
+  - `.bak-20260929`: a Notion pointer write passes the page id as
+    `metadata.notion_page_id`, and a reader prefers that over an id in the
+    text.
+  - `.bak-search-20260929`: a new "How the shared store searches" section. It
+    says `CHUNKS` for anything acted on, `CHUNKS_LEXICAL` for exact terms, and
+    `GRAPH_COMPLETION` only for broad questions and only as a lead.
+- Claude Desktop writes carry no metadata: `cognee-mcp`'s `remember` has no
+  metadata parameter.
+- Rollback: remove the key and restart. The plugin sends exactly what it sent
+  before.
 
 ### Upgraded to 1.6.1, 2026-09-29
 

@@ -53,6 +53,15 @@ the read/write routing; §12 the pointers; §13 attribution.
   including the four injected memory layers, two of which were undocumented, and
   the ~4,500-token block that arrives on every prompt regardless of the prompt.
 
+### Done on 2026-09-29
+
+* Backend on cognee 1.6.1, which copies a document's metadata onto its chunks.
+* Every permanent Hermes write now carries dated, attributed metadata, and
+  `CHUNKS` recall returns it. Hermes passes Notion pointers as
+  `metadata.notion_page_id`. `SOUL.md` explains the search modes, so Hermes
+  can choose between exact text and graph synthesis itself. **§16** has the
+  detail.
+
 ### What is left, in order
 
 Steps 1 and 2 below are **done** -- see §15, which supersedes them.
@@ -78,7 +87,10 @@ Steps 1 and 2 below are **done** -- see §15, which supersedes them.
 
 * **Whether to keep cognee at all.** Its graph was measured near-useless and
   retrieval rides on embeddings plus the LLM
-  (`cognee-graph-analysis.md` §6). Candidates researched 2026-09-26 in
+  (`cognee-graph-analysis.md` §6). Since `search_type: CHUNKS` became the
+  default, explicit recall does not touch the graph at all (§16). Every write
+  still pays the LLM extraction that builds it, and the injected block is its
+  main reader. Candidates researched 2026-09-26 in
   `claudedocs/research_honcho_20260926.md` and
   `claudedocs/research_openviking_20260926.md`. **Cheapest experiment first:**
   `LCM_ASSERTIONS_ENABLED` and `LCM_EMBEDDINGS_ENABLED` are two environment
@@ -744,6 +756,10 @@ prefixes nothing.** So today an untagged record means "probably Hermes, or
 possibly anything" — which is not attribution. Making Hermes tag its writes is
 a one-line prompt change and closes this.
 
+**Closed for Hermes, 2026-09-29 (§16):** its writes now carry
+`created_by: hermes` as metadata, not as a text convention. Claude Desktop is
+still text-prefix only, because `cognee-mcp`'s `remember` takes no metadata.
+
 ### Tier 4 — the gap
 
 Across the 100 most recently edited pages there are exactly **two** actors:
@@ -960,7 +976,9 @@ URL is worse than no record, because it reads as usable.
 ### Open
 
 * **What actually crosses the tier-3 / tier-4 boundary.** Unresolved, and it is
-  the likely source of the contradictory dates. Tier 3 is specified here as
+  the likely source of the contradictory dates. (Partly eased 2026-09-29: a
+  pointer now carries its page id as metadata, so it can be followed without
+  parsing the text -- §16. The description question is unchanged.) Tier 3 is specified here as
   pointers plus dated assertions, but at least one record written by Claude
   Desktop embeds a *description* of a Notion page's content and its creation
   date, and `notion-cli-operations/SKILL.md:111` instructs exactly that ("record
@@ -976,3 +994,65 @@ URL is worse than no record, because it reads as usable.
   (`memory_steer: false`).
 * Whether the rewritten pointer records ever become recallable.
 * Career has no retrieval layer specified since GBrain was removed.
+
+## 16. Write metadata and search modes, 2026-09-29
+
+### What changed
+
+Cognee 1.6.1 (`topoteretes/cognee#5158`) copies a document's
+`external_metadata` onto its chunks. The plugin sent none, so the fork gained a
+`write_metadata` key (fork PRs #2 and #3; hermes #39 and #40). With it on, every
+permanent write stores:
+
+| key | value |
+|---|---|
+| `created_at` | UTC time of the write |
+| `created_by` | `hermes` (the `created_by` config key) |
+| `write_origin` | `cognee_remember` or `hermes_memory_tool` |
+| `hermes_session_id` | the Hermes session, for the tier-2 join in §12 |
+
+`cognee_remember` also accepts a flat `metadata` object. Hermes is told to put a
+Notion pointer's page id in `metadata.notion_page_id`. A malformed id is
+refused rather than stored -- the §15 truncated-URL bug, prevented at write
+time.
+
+A `CHUNKS` recall returns the metadata with each result. Completion modes do
+not: over HTTP the `/v1/recall` endpoint has no switch to include it. That makes
+the dates and pointers available exactly where they can be trusted, and nowhere
+else.
+
+Verified on the first live write. Operational detail and rollback are in
+`cognee-operations.md` §5 and §10.
+
+### What it does not change
+
+* **The graph is barely used.** `CHUNKS` is vector search over the stored text;
+  it never reads the entities and relations cognify extracts. With `CHUNKS` as
+  the default, the graph's readers are:
+  * the injected block (`HYBRID_COMPLETION`, graph plus LLM), which is the
+    lane `SOUL.md` says not to trust;
+  * any explicit `GRAPH_COMPLETION` call;
+  * possibly Claude Desktop's MCP recall. Its default search type has not been
+    checked.
+* **Completion modes still paraphrase.** Metadata does not make a synthesised
+  answer safe to act on; it only makes the literal path richer.
+* **Old records** carry no metadata. **Claude Desktop** writes carry none
+  either, because `cognee-mcp`'s `remember` has no metadata parameter.
+
+### The search-mode prompt
+
+`SOUL.md` now explains the two storage forms and the modes, so the agent
+chooses rather than following a rule it cannot see the reason for:
+* `CHUNKS` for anything acted on or quoted;
+* `CHUNKS_LEXICAL` for exact terms (present on 1.6.1, not yet exercised
+  here);
+* `GRAPH_COMPLETION` for broad questions that join memories, treated as a
+  lead only.
+
+### Open
+
+* **Does Hermes ever choose `GRAPH_COMPLETION`?** Count explicit
+  `cognee_recall` calls by `search_type` over a week or two. If it almost never
+  does, the graph is paid for on every write and read only by the injected
+  block, which strengthens the case in §0 for a cheaper backend.
+* Claude Desktop's recall mode and the missing MCP metadata parameter.
