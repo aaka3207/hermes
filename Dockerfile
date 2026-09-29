@@ -897,13 +897,13 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 #
 # Installed from a FORK, not from PyPI and not from upstream. The fork is
 # `aaka3207/cognee-integrations`, pinned to a full commit sha on its `main`
-# (PR #1, squash-merged). Pin the merged commit, not the topic branch's tip: the
+# (PRs #1-#3, squash-merged). Pin the merged commit, not the topic branch's tip: the
 # squash orphans that tip, and an orphaned sha is fetchable only until GitHub
 # garbage-collects it. The subtree was compared before repinning -- the squashed
 # `integrations/hermes-agent` tree is byte-identical to the branch tip's.
 #
-# The fork is upstream `main` (plugin 1.3.0) plus four commits, none of which
-# changes behaviour until a config key is set:
+# The fork is upstream `main` (plugin 1.3.0) plus these changes, none of which
+# changes behaviour until a config key is set (except 1, a bug fix):
 #
 #   1. `_remember` derived its upload filename from the content instead of
 #      uploading every memory as `memory.txt`. That fixed name makes cognee
@@ -926,9 +926,19 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 #   4. The `GRAPH_COMPLETION` literal behind `auto_route: false` got a name.
 #      No behaviour change; it documents that turning auto_route off pins the
 #      completion rather than making retrieval more literal.
+#   5. `write_metadata` (fork PRs #2 and #3). When it is on, every permanent
+#      write carries cognee `external_metadata`: created_at, created_by
+#      (`created_by` key, default "hermes"), write_origin and
+#      hermes_session_id. `cognee_remember` also accepts an optional flat
+#      `metadata` object, validated before anything is stored. On cognee
+#      >= 1.6.1 (topoteretes/cognee#5158) that metadata lands on the chunks,
+#      and `cognee_recall` returns it with each CHUNKS result. The only
+#      fork-only part is `notion_pointer.py`: a `notion_page_id` key must hold
+#      a real page id or the write is refused. Everything else is generic.
 #
-# Return to PyPI when a release carries all four. Commits 1-4 are separable and
-# intended to go upstream; commit 1 is `topoteretes/cognee-integrations#436`.
+# Return to PyPI when a release carries 1-5. They are separable and intended to
+# go upstream, except `notion_pointer.py`; commit 1 is
+# `topoteretes/cognee-integrations#436`.
 # Until then: rebase the fork onto upstream rather than cherry-picking, and move
 # the sha here in the same commit as the `--exclude-newer-package` date if the
 # rebase brings a new cognee pin with it.
@@ -945,7 +955,7 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
         --exclude-newer-package "cognee=2026-09-19T00:00:00Z" \
         --exclude-newer-package "enola-cli=2026-09-19T00:00:00Z" \
-        "cognee-integration-hermes-agent @ git+https://github.com/aaka3207/cognee-integrations.git@959ec5485278149dd5ba4449fd50eef4c09097d9#subdirectory=integrations/hermes-agent" \
+        "cognee-integration-hermes-agent @ git+https://github.com/aaka3207/cognee-integrations.git@32bb76bccdceed201aa826fd5ff5ad1c71e0fc31#subdirectory=integrations/hermes-agent" \
         "packaging==26.0" && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-remember-filename.py
@@ -956,7 +966,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
 #
 # What it is guarding against: `_remember` used to upload every memory as a file
 # named `memory.txt`. Harmless on cognee 1.5.4, where add() silently replaced a
-# same-named document -- fatal against the self-hosted cognee 1.6.0 backend
+# same-named document -- fatal against the self-hosted cognee >= 1.6.0 backend
 # (deploy/cognee-selfhost.compose.yaml), which raises
 # DocumentUpdateRequiredError (409) instead. The first remember in a dataset then
 # wins and every later one fails, while recall and the Claude Desktop MCP path
