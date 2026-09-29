@@ -56,9 +56,9 @@ source of truth, and the Coolify copy is pushed from it.
 
 | Container | Image | Port | Reachable at |
 |---|---|---|---|
-| `cognee-backend-lndyf8z46p75oh524khm5z19` | `cognee/cognee:1.6.0` | 8000 | `https://cognee.aakashe.org` |
+| `cognee-backend-lndyf8z46p75oh524khm5z19` | `cognee/cognee:1.6.1` | 8000 | `https://cognee.aakashe.org` |
 | `cognee-mcp-lndyf8z46p75oh524khm5z19` | `cognee/cognee-mcp:main-bbec4a2` | 8000 (`/sse`) | internal only, via metamcp |
-| `cognee-ui-lndyf8z46p75oh524khm5z19` | `cognee/cognee-ui:1.6.0` | 3000 | `https://cognee-ui.aakashe.org` |
+| `cognee-ui-lndyf8z46p75oh524khm5z19` | `cognee/cognee-ui:1.6.1` | 3000 | `https://cognee-ui.aakashe.org` |
 | `cognee-postgres-lndyf8z46p75oh524khm5z19` | `pgvector/pgvector:pg17` | 5432 | internal only |
 
 Volumes: `cognee_system` (`/cognee-storage/system`, holds the Kuzu graph),
@@ -72,7 +72,7 @@ dashboard itself. Publishing a container port there takes Coolify down.
 Every image carries an explicit tag, and `compose_invariants.py` fails the
 build if one is loosened to `latest`/`main`. **A tag is not a digest.**
 Nothing here pins by `sha256:`, so what a tag resolves to can change if the
-publisher re-pushes it — `cognee:1.6.0` is a release tag and is unlikely to
+publisher re-pushes it — `cognee:1.6.1` is a release tag and is unlikely to
 move, but `main-bbec4a2` is a *mutable branch-build tag that happens to
 contain a commit prefix*, not an immutable reference to that commit. What the
 pinning buys is that a redeploy does not silently pick up a newer release; it
@@ -82,10 +82,10 @@ is ever needed, replace the tags with `@sha256:` digests.
 `cognee/cognee` and `cognee/cognee-ui` move together —
 the UI talks to the backend's API and a version skew shows up as a blank page
 with 422s in the browser console, not as a container failure. Treat
-`cognee:1.6.0` + `cognee-ui:1.6.0` as one unit and upgrade both or neither.
+`cognee:1.6.1` + `cognee-ui:1.6.1` as one unit and upgrade both or neither.
 
-`cognee-mcp` has no `1.6.0` tag; `main-bbec4a2` is the branch-build tag
-verified against this backend.
+`cognee-mcp` has no release tags at all; `main-bbec4a2` is the branch-build tag
+verified against this backend, on 1.6.0 and again on 1.6.1.
 
 ---
 
@@ -608,7 +608,9 @@ though the mismatch is now closed.
 **Resolved 2026-09-27.** The pin moved to the fork
 (`aaka3207/cognee-integrations`, its `main` after PR #1), which is
 upstream plugin **1.3.0** and declares **`cognee==1.6.0`** — the same version
-the backend runs. Plugin and server now agree. Historically:
+the backend ran until 2026-09-29. The backend is now 1.6.1 and the plugin
+still declares 1.6.0; that skew is harmless, because the plugin reaches the
+backend over HTTP and never imports the cognee it installs (see §10). Historically:
 `cognee-integration-hermes-agent` 1.2.2 declared `cognee==1.5.4` while we ran
 `cognee/cognee:1.6.0`. The design spec
 (`specs/2026-09-20-cognee-selfhost-design.md:465`) weighed 1.6.0 against 1.5.4
@@ -788,7 +790,7 @@ docker ps -a --filter "name=lndyf8z46p75oh524khm5z19" \
 
 # Backend health and version
 curl -s https://cognee.aakashe.org/health
-# -> {"status":"ready","health":"healthy","version":"1.6.0-local"}
+# -> {"status":"ready","health":"healthy","version":"1.6.1-local"}
 
 # Auth is actually enforced (must be 401)
 curl -s -o /dev/null -w '%{http_code}\n' https://cognee.aakashe.org/api/v1/datasets
@@ -854,6 +856,35 @@ loses a month. That is the reason §11 needs a date, not just a verdict.
 ---
 
 ## 10. Current live state
+
+### Upgraded to 1.6.1, 2026-09-29
+
+Backend and UI moved from 1.6.0 to 1.6.1 for `topoteretes/cognee#5158`
+(document `external_metadata` copied onto chunks). `cognee-mcp` and the Hermes
+image were not touched: the plugin talks to the backend over HTTP.
+
+- Backed up first, to the host's home directory:
+  `cognee_db-pre161-20260929-1456.dump` (pg_dump, 38MB) and
+  `cognee_storage-pre161-20260929-1456.tgz` (`/cognee-storage/system` and
+  `/data`, which holds the Kuzu graph -- the Postgres dump alone does not).
+- One startup migration ran: `a7c2e9f4b8d1 -> e7f9a1c3d5b8`, the
+  `ix_data_dataset_created` index. Verified present.
+- `/health` reports `1.6.1-local`; unauthenticated calls still 401; all four
+  containers healthy; UI answers 200.
+- Round trip through the plugin's own `HttpBackend` inside the Hermes
+  container, against a throwaway dataset: `remember_permanent` completed in
+  24s, a `CHUNKS` recall returned the record verbatim, a read-only recall of
+  `shared` returned 5 rows, and the throwaway dataset was forgotten and is gone.
+- **Expected noise in the startup log:** an `HFValidationError` traceback,
+  *"Repo id must be in the form 'repo_name' or 'namespace/repo_name':
+  'openrouter/openai/text-embedding-3-small'"*. A tokenizer lookup treats the
+  three-part OpenRouter model name as a Hugging Face repo id and fails. It is
+  caught and logged as a warning and does not stop the server or break writes
+  (the round trip above ran after it). Not checked whether 1.6.0 logged it too.
+- Rollback: set both tags back to `1.6.0`, push the compose, redeploy. The new
+  index can stay. Restore the backups only if data went wrong.
+
+### As of 2026-09-23
 
 Verified **2026-09-23**. The personal profile is live on this backend.
 
