@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Give each Cognee `remember` a content-derived upload filename.
+"""Give each Cognee `remember` a content-derived upload filename -- or prove it
+already has one.
+
+**Since the Dockerfile pin moved to the fork, this normally patches nothing.**
+The fork carries the fix in its own source, so the anchor below is absent and
+the script runs its verification path instead: it asserts the installed
+``_remember`` derives its upload name from the content, and fails the build if
+it does not. That is what makes a bad fork rebase loud rather than silent. The
+patching path is kept because it still applies to the upstream pin, so a
+rollback needs no change here.
 
 `cognee-integration-hermes-agent`'s ``HttpBackend._remember`` uploads every
 permanent memory as a multipart file literally named ``memory.txt``. The
@@ -39,12 +48,15 @@ whole change is one contiguous replacement. A second, distant edit to the
 import block would be another way for this patch to half-apply; the import is
 cached after first use, so the cost is nil.
 
-Upstream: topoteretes/cognee-integrations#436. Remove this file once a release
-carrying the fix is pinned in the Dockerfile.
+Upstream: topoteretes/cognee-integrations#436. Remove this file once a PyPI
+release carrying the fix is pinned in the Dockerfile.
 
 Exit codes:
-    0  patched, already patched, plugin absent, or upstream appears fixed
-    1  the fixed filename is still present but moved -- refuse to boot
+    0  patched, already patched, plugin absent, or the installed source was
+       verified to derive the upload name from the content
+    1  a fixed upload filename is still in place -- the old ``memory.txt`` with
+       a moved anchor, or any other fixed name, which 409s identically. Refuse
+       to boot rather than run with writes that fail silently.
 """
 import glob
 import hashlib
@@ -88,6 +100,48 @@ def target_path(base=None):
     return matches[0] if matches else pattern.replace("python3.*", "python3")
 
 
+def verify_fixed_upstream(target, src):
+    """Assert the installed source already derives the upload name itself.
+
+    Reached when the patch anchor is gone and no ``"memory.txt"`` remains, which
+    is the shape of a tree that carries the fix -- the fork pinned in the
+    Dockerfile, or eventually an upstream release. "The old literal is absent"
+    is too weak to accept on its own: renaming it to any other fixed value, say
+    ``memory.md``, also removes the literal and reintroduces the 409 outage in
+    full. So check for the fix positively instead.
+
+    Both markers must appear in the same ``_remember`` body. Scanning the whole
+    module would pass on a ``hashlib`` import used somewhere else entirely.
+    """
+    body = remember_body(src)
+    if body is None:
+        print("%s FATAL: no _remember found in %s. The method was renamed or "
+              "removed; refusing to boot rather than assume #436 is fixed."
+              % (TAG, target), file=sys.stderr)
+        return 1
+
+    if "hashlib" not in body or "sha256" not in body:
+        print("%s FATAL: _remember in %s names no content-derived upload file "
+              "(no hashlib/sha256 in its body). The fixed name may have been "
+              "replaced by another fixed name, which 409s exactly the same way. "
+              "Re-check upstream #436." % (TAG, target), file=sys.stderr)
+        return 1
+
+    print("%s upstream fix verified: _remember derives its upload name from the "
+          "content. %s" % (TAG, target))
+    return 0
+
+
+def remember_body(src):
+    """The source of ``_remember``, or None. Ends at the next def at its indent."""
+    start = src.find("    def _remember(")
+    if start == -1:
+        return None
+    rest = src[start + 1:]
+    end = rest.find("\n    def ")
+    return rest if end == -1 else rest[:end]
+
+
 def apply(target):
     """Patch ``target`` in place. Returns an exit code; never raises on the
     ordinary paths so the caller can use it directly as a build/boot gate."""
@@ -104,9 +158,7 @@ def apply(target):
     n = src.count(OLD)
     if n != 1:
         if '"memory.txt"' not in src:
-            print("%s anchor absent and no fixed memory.txt name remains; "
-                  "assuming upstream fixed #436. Continuing." % TAG)
-            return 0
+            return verify_fixed_upstream(target, src)
         print('%s FATAL: anchor matched %d times but "memory.txt" is still '
               "present in %s. The upload-name code moved; refusing to boot "
               "rather than run with memory writes that 409 silently. "

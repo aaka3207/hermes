@@ -95,10 +95,10 @@ def build(tmp, *, with_cognee=True, entry_point=True, backend="HttpBackend",
                 return %s
         """ % gate)
 
-    dist = os.path.join(site, "cognee_integration_hermes-1.2.2.dist-info")
+    dist = os.path.join(site, "cognee_integration_hermes-1.3.0.dist-info")
     write(os.path.join(dist, "METADATA"),
           "Metadata-Version: 2.1\nName: cognee-integration-hermes-agent\n"
-          "Version: 1.2.2\n")
+          "Version: 1.3.0\n")
     if entry_point:
         write(os.path.join(dist, "entry_points.txt"),
               "[hermes_agent.memory_providers]\n"

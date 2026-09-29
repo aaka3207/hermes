@@ -60,9 +60,9 @@ source of truth, and the Coolify copy is pushed from it.
 
 | Container | Image | Port | Reachable at |
 |---|---|---|---|
-| `cognee-backend-lndyf8z46p75oh524khm5z19` | `cognee/cognee:1.6.0` | 8000 | `https://cognee.aakashe.org` |
+| `cognee-backend-lndyf8z46p75oh524khm5z19` | `cognee/cognee:1.6.1` | 8000 | `https://cognee.aakashe.org` |
 | `cognee-mcp-lndyf8z46p75oh524khm5z19` | `cognee/cognee-mcp:main-bbec4a2` | 8000 (`/sse`) | internal only, via metamcp |
-| `cognee-ui-lndyf8z46p75oh524khm5z19` | `cognee/cognee-ui:1.6.0` | 3000 | `https://cognee-ui.aakashe.org` |
+| `cognee-ui-lndyf8z46p75oh524khm5z19` | `cognee/cognee-ui:1.6.1` | 3000 | `https://cognee-ui.aakashe.org` |
 | `cognee-postgres-lndyf8z46p75oh524khm5z19` | `pgvector/pgvector:pg17` | 5432 | internal only |
 
 Volumes: `cognee_system` (`/cognee-storage/system`, holds the Kuzu graph),
@@ -76,7 +76,7 @@ dashboard itself. Publishing a container port there takes Coolify down.
 Every image carries an explicit tag, and `compose_invariants.py` fails the
 build if one is loosened to `latest`/`main`. **A tag is not a digest.**
 Nothing here pins by `sha256:`, so what a tag resolves to can change if the
-publisher re-pushes it — `cognee:1.6.0` is a release tag and is unlikely to
+publisher re-pushes it — `cognee:1.6.1` is a release tag and is unlikely to
 move, but `main-bbec4a2` is a *mutable branch-build tag that happens to
 contain a commit prefix*, not an immutable reference to that commit. What the
 pinning buys is that a redeploy does not silently pick up a newer release; it
@@ -86,10 +86,10 @@ is ever needed, replace the tags with `@sha256:` digests.
 `cognee/cognee` and `cognee/cognee-ui` move together —
 the UI talks to the backend's API and a version skew shows up as a blank page
 with 422s in the browser console, not as a container failure. Treat
-`cognee:1.6.0` + `cognee-ui:1.6.0` as one unit and upgrade both or neither.
+`cognee:1.6.1` + `cognee-ui:1.6.1` as one unit and upgrade both or neither.
 
-`cognee-mcp` has no `1.6.0` tag; `main-bbec4a2` is the branch-build tag
-verified against this backend.
+`cognee-mcp` has no release tags at all; `main-bbec4a2` is the branch-build tag
+verified against this backend, on 1.6.0 and again on 1.6.1.
 
 ---
 
@@ -350,11 +350,30 @@ Personal profile `/opt/data/cognee.json`:
 {
   "auto_route": true,
   "dataset": "shared",
-  "improve_on_end": true,
+  "improve_on_end": false,
+  "search_type": "CHUNKS",
   "service_url": "https://cognee.aakashe.org",
+  "session_writes": false,
   "api_key": "<the minted Cognee API key>"
 }
 ```
+
+`search_type` and `session_writes` exist only in the forked plugin (see §7,
+"The plugin pins an older cognee than we run"). Both matter more than they
+look:
+
+* **`search_type: "CHUNKS"`** returns the stored text. Without it the server's
+  query classifier routes a short query to an LLM completion over the graph,
+  and the completion writes prose — it paraphrases names, ids and dates, and
+  where the corpus holds conversational turns it imitates them instead of
+  retrieving. A per-call `search_type` argument still wins over this; the point
+  of the key is that a caller who *forgets* the argument no longer gets the
+  worst mode. Do **not** reach for `auto_route: false` instead — that pins
+  `GRAPH_COMPLETION`, which is the worst performer measured.
+* **`session_writes: false`** stops the per-turn session-cache write.
+  `improve_on_end: false` does not: it governs only promotion into the
+  permanent dataset at session end. With `improve_on_end` already off, both
+  session tables truncated to zero refilled within five minutes of normal use.
 
 Flip the provider in `/opt/data/config.yaml` (`memory.provider: cognee`) and
 add `cognee` to `plugins.enabled`, then restart the personal gateway alone:
@@ -620,18 +639,57 @@ removes Cloudflare from the question. Redeploying the app fixed it; restarting
 
 ### The plugin pins an older cognee than we run
 
-**Check the plugin's declared pin whenever the backend image moves.**
-`cognee-integration-hermes-agent` 1.2.2 (the latest on PyPI, 2026-09-21)
-declares `cognee==1.5.4`. We run `cognee/cognee:1.6.0`. The design spec
-(`specs/2026-09-20-cognee-selfhost-design.md:465`) weighed 1.6.0 against
-1.5.4 and accepted it, but only assessed the pgvector/adapter refactor — it
-never checked what the in-image plugin targets. That gap cost two days of
-lost writes:
+**Check the plugin's declared pin whenever the backend image moves.** This is
+how the mismatch below was found, and the check is still the right habit even
+though the mismatch is now closed.
+
+**Resolved 2026-09-27.** The pin moved to the fork
+(`aaka3207/cognee-integrations`, its `main` after PR #1), which is
+upstream plugin **1.3.0** and declares **`cognee==1.6.0`** — the same version
+the backend ran until 2026-09-29. The backend is now 1.6.1 and the plugin
+still declares 1.6.0; that skew is harmless, because the plugin reaches the
+backend over HTTP and never imports the cognee it installs (see §10). Historically:
+`cognee-integration-hermes-agent` 1.2.2 declared `cognee==1.5.4` while we ran
+`cognee/cognee:1.6.0`. The design spec
+(`specs/2026-09-20-cognee-selfhost-design.md:465`) weighed 1.6.0 against 1.5.4
+and accepted it, but only assessed the pgvector/adapter refactor — it never
+checked what the in-image plugin targets. That gap cost two days of lost
+writes:
 
 ```bash
 docker exec <hermes container> sh -c \
   "grep -E '^Requires-Dist: cognee' /opt/hermes/.venv/lib/python3.13/site-packages/cognee_integration_hermes_agent-*.dist-info/METADATA"
 ```
+
+**Bumping the pin: exempt the transitive exact pins from `exclude-newer`, not
+just cognee.** The base image sets `exclude-newer = "14 days"`
+(`/opt/hermes/pyproject.toml`), and a freshly released cognee sits inside that
+window, so the Dockerfile carries a scoped `--exclude-newer-package` for it.
+That is not sufficient on its own: cognee holds exact pins of its own, and a
+recent one falls outside the window too. `cognee==1.6.0` pins
+`enola-cli==0.4.21`, released the same day, and the failure **names the
+transitive package**, which reads like a broken dependency rather than a date
+wall:
+
+```
+Because there is no version of enola-cli==0.4.21 and cognee==1.6.0
+depends on enola-cli==0.4.21, we can conclude that cognee==1.6.0 cannot be used.
+```
+
+So each such pin needs its own `--exclude-newer-package` line. Find them before
+building, by resolving against a simulated wall rather than discovering it in a
+15-minute image build:
+
+```bash
+uv pip install --python /tmp/probe/bin/python --no-cache --dry-run \
+  --exclude-newer "$(date -u -v-14d +%Y-%m-%dT00:00:00Z)" \
+  --exclude-newer-package "cognee=<release date + 1>" \
+  "cognee-integration-hermes-agent @ git+<the pin>#subdirectory=integrations/hermes-agent" \
+  "packaging==26.0"
+```
+
+Check the output for `packaging==26.0` surviving and for any downgrade — that is
+what the `packaging` argument on the real install exists to catch.
 
 **Symptom, 2026-09-21 to 2026-09-23: every Hermes memory write 409'd while
 everything else looked healthy.** `HttpBackend._remember` uploaded every
@@ -651,10 +709,11 @@ single row literally named `memory`.
 select name, count(*) from data where name not like 'text\_%' group by name;
 ```
 
-Fixed locally by deriving the filename from the content
-(`memory-<sha256[:16]>.txt`), which is what cognee already does for text.
-Filed upstream as
-[topoteretes/cognee-integrations#436](https://github.com/topoteretes/cognee-integrations/issues/436).
+Fixed by deriving the filename from the content (`memory-<sha256[:16]>.txt`),
+which is what cognee already does for text. Filed upstream as
+[topoteretes/cognee-integrations#436](https://github.com/topoteretes/cognee-integrations/issues/436),
+and **the fix now lives in the forked plugin's own source** rather than in an
+in-image patch.
 
 Two traps around the fix:
 
@@ -666,17 +725,24 @@ Two traps around the fix:
   notes other code constructs and asserts on that form; a same-shaped name
   with a differently-computed hash risks tripping those assertions.
 
-**The fix is baked into the image, so a redeploy no longer loses it.**
-`docker/cognee-remember-filename.py` is applied in the same `RUN` as the
-plugin install (see the Dockerfile note next to the
-`cognee-integration-hermes-agent` pin) — chained rather than a separate
-layer, so a rebuilt install layer cannot sit under a cached "already
-patched". It follows the `lcm-588-mitigation.py` pattern: idempotent, atomic
-write, `py_compile` check with revert, exit 0 when upstream fixes this, and
-exit 1 — **failing the build** — if the anchor moves while the fixed name
-remains. `tests/test_cognee_remember_filename.py` covers all of that,
-including a control proving unpatched source really does collide. Validated
-against the exact pinned upstream commit, not just a fixture.
+**The fix is in the pinned plugin's source, and the old patcher is now a
+guard.** `docker/cognee-remember-filename.py` still runs in the same `RUN` as
+the plugin install (see the Dockerfile note next to the
+`cognee-integration-hermes-agent` pin) — chained rather than a separate layer,
+so a rebuilt install layer cannot sit under a cached pass. Against the fork it
+finds no anchor to patch and **asserts** instead: the installed `_remember` must
+derive its upload name from the content, or the build fails. That is what makes
+a bad fork rebase loud — drop the fix while syncing upstream and the build stops
+here rather than shipping another silent write outage.
+
+It keeps the patching path too, so rolling the pin back to upstream needs no
+change. It follows the `lcm-588-mitigation.py` pattern: idempotent, atomic
+write, `py_compile` check with revert.
+`tests/test_cognee_remember_filename.py` covers all ten paths, including a
+control proving unpatched source really does collide, and the case that
+motivated the stricter check — **one fixed name swapped for another**. The old
+"no `memory.txt` left, assume it's fixed" branch passed that, and a rename to
+e.g. `memory.md` 409s identically.
 
 `/opt/hermes` is image content — only `/opt/data` is a volume — so nothing
 needs re-asserting at boot, unlike the LCM mitigation.
@@ -814,7 +880,7 @@ docker ps -a --filter "name=lndyf8z46p75oh524khm5z19" \
 
 # Backend health and version
 curl -s https://cognee.aakashe.org/health
-# -> {"status":"ready","health":"healthy","version":"1.6.0-local"}
+# -> {"status":"ready","health":"healthy","version":"1.6.1-local"}
 
 # Auth is actually enforced (must be 401)
 curl -s -o /dev/null -w '%{http_code}\n' https://cognee.aakashe.org/api/v1/datasets
@@ -1090,6 +1156,35 @@ profile already doing it, and only *deletes* from `.env`.
 ---
 
 ## 10. Current live state
+
+### Upgraded to 1.6.1, 2026-09-29
+
+Backend and UI moved from 1.6.0 to 1.6.1 for `topoteretes/cognee#5158`
+(document `external_metadata` copied onto chunks). `cognee-mcp` and the Hermes
+image were not touched: the plugin talks to the backend over HTTP.
+
+- Backed up first, to the host's home directory:
+  `cognee_db-pre161-20260929-1456.dump` (pg_dump, 38MB) and
+  `cognee_storage-pre161-20260929-1456.tgz` (`/cognee-storage/system` and
+  `/data`, which holds the Kuzu graph -- the Postgres dump alone does not).
+- One startup migration ran: `a7c2e9f4b8d1 -> e7f9a1c3d5b8`, the
+  `ix_data_dataset_created` index. Verified present.
+- `/health` reports `1.6.1-local`; unauthenticated calls still 401; all four
+  containers healthy; UI answers 200.
+- Round trip through the plugin's own `HttpBackend` inside the Hermes
+  container, against a throwaway dataset: `remember_permanent` completed in
+  24s, a `CHUNKS` recall returned the record verbatim, a read-only recall of
+  `shared` returned 5 rows, and the throwaway dataset was forgotten and is gone.
+- **Expected noise in the startup log:** an `HFValidationError` traceback,
+  *"Repo id must be in the form 'repo_name' or 'namespace/repo_name':
+  'openrouter/openai/text-embedding-3-small'"*. A tokenizer lookup treats the
+  three-part OpenRouter model name as a Hugging Face repo id and fails. It is
+  caught and logged as a warning and does not stop the server or break writes
+  (the round trip above ran after it). Not checked whether 1.6.0 logged it too.
+- Rollback: set both tags back to `1.6.0`, push the compose, redeploy. The new
+  index can stay. Restore the backups only if data went wrong.
+
+### As of 2026-09-23
 
 Verified **2026-09-23**. The personal profile is live on this backend.
 

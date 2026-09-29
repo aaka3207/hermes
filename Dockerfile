@@ -857,14 +857,32 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 #      cognee 1.5.4 moves to limits==5.8.0, which lifts the cap. So 1.2.2 is not
 #      a nice-to-have here, it is the first version that coexists with the image.
 #
-#   2. cognee 1.5.4 shipped 2026-09-04, inside the base image's
+#   2. cognee 1.6.0 shipped 2026-09-18, inside the base image's
 #      `exclude-newer = "14 days"` (/opt/hermes/pyproject.toml), so a plain
-#      resolve fails with "there is no version of cognee==1.5.4". The exemption
+#      resolve fails with "there is no version of cognee==1.6.0". The exemption
 #      below is scoped to that one package and dated one day past its release --
 #      the shape the base pyproject already documents as safe ("Exempting exact
-#      pins is pure brick-risk removal at no supply-chain cost"). cognee==1.5.4
+#      pins is pure brick-risk removal at no supply-chain cost"). cognee==1.6.0
 #      is an exact pin held by the integration, so the cutoff adds no float
 #      protection here, only brick risk.
+#
+#      The date moved 09-05 -> 09-19 with the plugin bump below. 1.3.0 pins
+#      cognee==1.6.0, which is also the version the self-hosted backend runs
+#      (deploy/cognee-selfhost.compose.yaml) -- the plugin and the server now
+#      agree, which they had not since the backend moved to 1.6.0.
+#
+#      **One exemption is not enough: exempt the transitive exact pins too.**
+#      cognee==1.6.0 depends on `enola-cli==0.4.21`, released 2026-09-18, also
+#      inside the window -- so exempting `cognee` alone still fails, and the
+#      message names enola-cli rather than cognee, which is easy to misread as
+#      a broken dependency:
+#          "Because there is no version of enola-cli==0.4.21 and cognee==1.6.0
+#           depends on enola-cli==0.4.21, we can conclude that cognee==1.6.0
+#           cannot be used."
+#      Any exact pin cognee holds on a package released inside the window needs
+#      its own line. Verified by a dry-run resolve against a simulated 14-day
+#      wall before this landed: 143 packages, cognee 1.6.0, limits 5.8.0,
+#      packaging 26.0 -- no downgrade, so guard (3) below still holds.
 #
 # Deliberately NOT `--exclude-newer-package cognee=$(date)`: a fixed date means a
 # future bump to a newer cognee fails this build loudly instead of silently
@@ -877,11 +895,53 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 # removals, zero downgrades; openai and pydantic-core untouched, so the Codex
 # null-guard and the mnemosyne patches above still hold.
 #
-# Installed from a pinned commit because 1.2.2 is not on PyPI yet (latest there
-# is 1.2.1). Move to `cognee-integration-hermes-agent==1.2.2` when it publishes;
-# the commit and the released tree are the same code. 1.2.2 also dispatches the
-# recall lanes concurrently rather than serially, which cloud mode feels
-# directly -- it pays a network round trip per lane.
+# Installed from a FORK, not from PyPI and not from upstream. The fork is
+# `aaka3207/cognee-integrations`, pinned to a full commit sha on its `main`
+# (PRs #1-#3, squash-merged). Pin the merged commit, not the topic branch's tip: the
+# squash orphans that tip, and an orphaned sha is fetchable only until GitHub
+# garbage-collects it. The subtree was compared before repinning -- the squashed
+# `integrations/hermes-agent` tree is byte-identical to the branch tip's.
+#
+# The fork is upstream `main` (plugin 1.3.0) plus these changes, none of which
+# changes behaviour until a config key is set (except 1, a bug fix):
+#
+#   1. `_remember` derived its upload filename from the content instead of
+#      uploading every memory as `memory.txt`. That fixed name makes cognee
+#      >= 1.6.0 reject every write after the first with a 409 while recall keeps
+#      working -- the silent write outage of 2026-09-21..23. This replaces the
+#      in-image patch that `docker/cognee-remember-filename.py` used to apply;
+#      see the note below the RUN for why that script is still here.
+#   2. `search_type` became a config key. It had existed only as a per-call tool
+#      argument, so an agent that omitted it fell through to the server's query
+#      classifier, which routes a short query to an LLM completion over the
+#      graph -- and a completion paraphrases names, ids and dates rather than
+#      returning the record. Measured: the query that returned the right record
+#      ranked first under CHUNKS came back through the classifier as a request
+#      to resend a link. Set `search_type` in the profile's cognee.json.
+#   3. `session_writes` became a config key. `sync_turn` mirrors every turn into
+#      the session cache from a background thread and had no switch;
+#      `improve_on_end: false` looks like one and is not -- it governs only
+#      promotion at session end. Verified live: both session tables truncated to
+#      zero refilled within five minutes with improve_on_end already off.
+#   4. The `GRAPH_COMPLETION` literal behind `auto_route: false` got a name.
+#      No behaviour change; it documents that turning auto_route off pins the
+#      completion rather than making retrieval more literal.
+#   5. `write_metadata` (fork PRs #2 and #3). When it is on, every permanent
+#      write carries cognee `external_metadata`: created_at, created_by
+#      (`created_by` key, default "hermes"), write_origin and
+#      hermes_session_id. `cognee_remember` also accepts an optional flat
+#      `metadata` object, validated before anything is stored. On cognee
+#      >= 1.6.1 (topoteretes/cognee#5158) that metadata lands on the chunks,
+#      and `cognee_recall` returns it with each CHUNKS result. The only
+#      fork-only part is `notion_pointer.py`: a `notion_page_id` key must hold
+#      a real page id or the write is refused. Everything else is generic.
+#
+# Return to PyPI when a release carries 1-5. They are separable and intended to
+# go upstream, except `notion_pointer.py`; commit 1 is
+# `topoteretes/cognee-integrations#436`.
+# Until then: rebase the fork onto upstream rather than cherry-picking, and move
+# the sha here in the same commit as the `--exclude-newer-package` date if the
+# rebase brings a new cognee pin with it.
 #
 # None of the 64 packages reaches the per-turn path: a set COGNEE_BASE_URL
 # selects http_backend.HttpBackend, a urllib REST client. The smoke check
@@ -893,35 +953,41 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 # dir is needed -- this base image does scan `hermes_agent.memory_providers`
 # (plugins/memory/__init__.py:30), unlike the image ccd1b05da was written for.
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
-        --exclude-newer-package "cognee=2026-09-05T00:00:00Z" \
-        "cognee-integration-hermes-agent @ git+https://github.com/topoteretes/cognee-integrations.git@9103726f69cd198eefc7aee720b509df5e47f906#subdirectory=integrations/hermes-agent" \
+        --exclude-newer-package "cognee=2026-09-19T00:00:00Z" \
+        --exclude-newer-package "enola-cli=2026-09-19T00:00:00Z" \
+        "cognee-integration-hermes-agent @ git+https://github.com/aaka3207/cognee-integrations.git@32bb76bccdceed201aa826fd5ff5ad1c71e0fc31#subdirectory=integrations/hermes-agent" \
         "packaging==26.0" && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-remember-filename.py
 
-# The line above patches the plugin just installed, in the SAME layer.
+# The line above is now a GUARD, not a patch. The fork pinned above carries the
+# fix in its own source (commit 1), so the script finds nothing to patch and
+# asserts instead.
 #
-# _remember uploads every memory as a file named `memory.txt`. That is fine on
-# the cognee==1.5.4 this package pins, where add() silently replaced a
-# same-named document -- and fatal against the self-hosted cognee 1.6.0 backend
+# What it is guarding against: `_remember` used to upload every memory as a file
+# named `memory.txt`. Harmless on cognee 1.5.4, where add() silently replaced a
+# same-named document -- fatal against the self-hosted cognee >= 1.6.0 backend
 # (deploy/cognee-selfhost.compose.yaml), which raises
-# DocumentUpdateRequiredError (409) instead. The first remember in a dataset
-# then wins and every later one fails, while recall and the Claude Desktop MCP
-# path keep working, so memory looks healthy and stores nothing. Measured: two
-# days of silent write loss, 2026-09-21 to 2026-09-23.
+# DocumentUpdateRequiredError (409) instead. The first remember in a dataset then
+# wins and every later one fails, while recall and the Claude Desktop MCP path
+# keep working, so memory looks healthy and stores nothing. Measured: two days of
+# silent write loss, 2026-09-21 to 2026-09-23.
+#
+# The script asserts the installed `_remember` derives its upload name from the
+# content and names no fixed file, and exits 1 -- failing the build -- if either
+# is false. That is what makes a bad fork rebase loud: drop commit 1 while
+# syncing upstream and the build stops here instead of shipping another silent
+# write outage. It still applies the patch itself if it meets the old anchor, so
+# a rollback to the upstream pin needs no change here.
 #
 # Chained into the install's own RUN deliberately: as a separate layer it could
 # be cached while the install layer beneath it rebuilt, leaving a fresh
-# unpatched plugin under a cached "already patched" result.
-#
-# The script is idempotent, exits 0 when upstream fixes this, and exits 1 --
-# failing the build -- if the anchor moves while the fixed name remains. A loud
-# failure here is much cheaper than another silent write outage.
+# unguarded plugin under a cached pass.
 #
 # Upstream: topoteretes/cognee-integrations#436. Delete this note,
 # docker/cognee-remember-filename.py and
-# tests/test_cognee_remember_filename.py once the pin above moves to a release
-# carrying the fix.
+# tests/test_cognee_remember_filename.py once that lands upstream AND the pin
+# above returns to a PyPI release carrying it.
 
 # Wrap the stock entrypoint so the mitigation runs before anything opens the
 # LCM database. Declaring ENTRYPOINT resets the base image's CMD, so re-declare
