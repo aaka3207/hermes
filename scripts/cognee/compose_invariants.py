@@ -22,9 +22,9 @@ REQUIRED_SERVICES = ("cognee-backend", "cognee-mcp", "cognee-ui",
                      "cognee-postgres")
 
 PINNED = {
-    "cognee/cognee": "1.6.0",
+    "cognee/cognee": "1.6.1",
     "cognee/cognee-mcp": "main-bbec4a2",
-    "cognee/cognee-ui": "1.6.0",
+    "cognee/cognee-ui": "1.6.1",
     "pgvector/pgvector": "pg17",
 }
 

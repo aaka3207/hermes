@@ -9,7 +9,7 @@
 # backend's published domain through Traefik; everything else stays internal.
 services:
   cognee-backend:
-    image: cognee/cognee:1.6.0
+    image: cognee/cognee:1.6.1
     restart: always
     depends_on:
       cognee-postgres:
@@ -219,7 +219,7 @@ services:
   # Domains field in Coolify, same http+port shape as the backend:
   #   http://cognee-ui.aakashe.org:3000
   cognee-ui:
-    image: cognee/cognee-ui:1.6.0
+    image: cognee/cognee-ui:1.6.1
     restart: always
     depends_on:
       cognee-backend:

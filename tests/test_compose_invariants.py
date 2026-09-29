@@ -28,7 +28,7 @@ def check(name, ok, detail=""):
 GOOD = """
 services:
   cognee-backend:
-    image: cognee/cognee:1.6.0
+    image: cognee/cognee:1.6.1
     expose:
       - "8000"
     networks:
@@ -63,7 +63,7 @@ services:
       - COGNEE_API_AUTH_SCHEME=x-api-key
       - MCP_ALLOWED_HOSTS=cognee-mcp:*,cognee-mcp.aakashe.org:*
   cognee-ui:
-    image: cognee/cognee-ui:1.6.0
+    image: cognee/cognee-ui:1.6.1
     expose:
       - "3000"
     networks:
@@ -106,7 +106,7 @@ case("2/26 published host port is rejected",
                   '    ports:\n      - "8000:8000"', 1),
      "ports")
 case("3/26 floating :latest tag on a pinned image is rejected",
-     GOOD.replace("cognee/cognee:1.6.0", "cognee/cognee:latest"),
+     GOOD.replace("cognee/cognee:1.6.1", "cognee/cognee:latest"),
      "latest")
 case("4/26 floating :main tag on a pinned image is rejected",
      GOOD.replace("cognee/cognee-mcp:main-bbec4a2", "cognee/cognee-mcp:main"),
@@ -117,7 +117,7 @@ case("4/26 floating :main tag on a pinned image is rejected",
 # This case uses an image that isn't in PINNED at all -- only the
 # FLOATING_TAGS branch can flag it.
 case("5/26 floating tag on a non-pinned image is rejected",
-     GOOD.replace("cognee/cognee:1.6.0", "myorg/sidecar:latest"),
+     GOOD.replace("cognee/cognee:1.6.1", "myorg/sidecar:latest"),
      "latest")
 case("6/26 EMBEDDING_ENDPOINT is rejected",
      GOOD.replace("      - EMBEDDING_DIMENSIONS=1536",
