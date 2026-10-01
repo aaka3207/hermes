@@ -1408,3 +1408,31 @@ the Mnemosyne one: is cognee's graph worth its cost per write? Compare `CHUNKS`
 with `context_only` recall on real questions (design doc §17). Record here
 whether the graph found anything `CHUNKS` missed. If it never did, the graph is
 paying for nothing, and §0 of the design doc argues for a cheaper backend.
+
+**First measurement, 2026-10-01: the graph found nothing `CHUNKS` missed.**
+`scripts/cognee/graph_vs_chunks.py` asks 17 questions about records in `shared`
+(32 records), each with an answer stored verbatim, through each recall path
+Hermes uses (`top_k` 5, `scope: ["graph"]`). Two runs gave the same result:
+
+| mode | what uses it | questions fully answered | median time |
+|---|---|---|---|
+| `CHUNKS` | `cognee_recall` default | 17/17 | 0.3s |
+| `HYBRID_COMPLETION` + `only_context` | the injected `## Cognee Memory` block | 16/17 | 0.4s |
+| `GRAPH_COMPLETION` + `only_context` | `cognee_recall context_only` | 14/17 | 1.2s |
+| `GRAPH_COMPLETION` (LLM answer) | reference only | 12/17 | 1.5s |
+
+- No graph mode answered a question `CHUNKS` did not. The question types
+  included facts split across records, a newer record superseding an older one,
+  and broad "who is" questions.
+- Graph context missed Ameer's manager, his father's name, and why he takes PTO
+  on Oct 23 (Yasmeen's wedding). All three facts are stored. The extraction step
+  left them out of the graph, or retrieval didn't reach them.
+- The hybrid block works because it starts with chunk passages. Its graph sections
+  contributed one unique hit, "Ameer Akashe has sister Yasmeen Akashe", which
+  matched a name but did not answer the question.
+- `CHUNKS` ranked the right record first or second on 15 of 17 questions. The
+  weakest was the PTO reason, at rank 4, so `top_k` should not go below 5.
+- Caveat: a store this small favours `CHUNKS`, since `top_k` 5 returns 15% of
+  it, and its records are long and self-contained, so a fact that needs two
+  records rarely needs a graph hop. Re-run the script on 2026-10-14, after two
+  more weeks of writes, before deciding.

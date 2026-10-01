@@ -1202,6 +1202,12 @@ On the question that started this (the ENT appointment and the PTO it needs):
 
 One question settles nothing either way.
 
+**Seventeen questions, 2026-10-01** (`scripts/cognee/graph_vs_chunks.py`, results
+in §11 of `cognee-operations.md`): `CHUNKS` answered all 17, graph context 14,
+and the hybrid block 16, but only because it leads with chunk passages. The
+graph found nothing `CHUNKS` missed. The store is small (32 records), so this
+is an early reading, not the verdict.
+
 ### Plan
 
 * `CHUNKS` stays the default for anything acted on.
