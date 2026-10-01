@@ -1425,8 +1425,17 @@ Hermes uses (`top_k` 5, `scope: ["graph"]`). Two runs gave the same result:
   included facts split across records, a newer record superseding an older one,
   and broad "who is" questions.
 - Graph context missed Ameer's manager, his father's name, and why he takes PTO
-  on Oct 23 (Yasmeen's wedding). All three facts are stored. The extraction step
-  left them out of the graph, or retrieval didn't reach them.
+  on Oct 23 (Yasmeen's wedding). Extraction was not the cause: Cypher finds
+  `james fishwick` and `ahmad` as entities, each linked to its chunk. The
+  graph-context retrieval didn't pick those links for its answer. Dates are not
+  extracted as entities, so nothing links "Oct 23" across records.
+- The graph already links chunks to entities: every `DocumentChunk` has
+  `contains` edges to the entities in it (413 edges on 2026-10-01). Going from a
+  name to its chunks works over HTTP, e.g. `MATCH (ch:Node)-[r:EDGE]->(e:Node)
+  WHERE ch.type = 'DocumentChunk' AND e.name CONTAINS 'yasmeen' RETURN e.name,
+  ch.id`. That returned both Yasmeen chunks, across the split aliases `yasmeen`
+  and `yasmeen akashe`. No recall mode Hermes uses goes from entity to chunk
+  text this way.
 - The hybrid block works because it starts with chunk passages. Its graph sections
   contributed one unique hit, "Ameer Akashe has sister Yasmeen Akashe", which
   matched a name but did not answer the question.
