@@ -1203,16 +1203,19 @@ profile already doing it, and only *deletes* from `.env`.
 set.
 
 The plugin's `on_memory_write` copied every Hermes built-in memory write into
-`shared`, for both targets: `user` (`USER.md`) and `memory` (`MEMORY.md`, Hermes's
-notes on its own behaviour). Claude Desktop recalled one of those notes, a
-career-drafting rule, as if it were a fact about the user.
+`shared`, for both targets: `user` (`USER.md`) and `memory` (`MEMORY.md`). By
+Hermes's own routing, `USER.md` is the user's preferences and expectations, which
+is worth sharing, and `MEMORY.md` is facts about Hermes's environment (tool
+quirks, config, paths), which is useless to Claude Desktop.
 
 - **The fix:** fork `7343d4f` adds `memory_write_targets`, and the Dockerfile now
   pins it. `scripts/cognee/set_recall_keys.py` sets the key to `["user"]`; it is
   inert on the old image, so the order doesn't matter.
-- **Cleanup:** the one leaked record is data
-  `f8f24920-8719-46a5-9c79-0001b40d79d3` in `shared` (written 2026-09-30). Forget
-  it after deploying (§9, bulk retraction).
+- **No cleanup.** The one `MEMORY.md` record in `shared` (data
+  `f8f24920-8719-46a5-9c79-0001b40d79d3`) is a career-drafting rule, which is a
+  user expectation that was filed in the wrong place.
+  `scripts/cognee/patch_hermes_memory_files.py` moves it to `USER.md`, so the
+  shared copy is correct and stays.
 - **Verify:** add a throwaway `MEMORY.md` entry in Hermes and confirm no new
   `Hermes memory memory (...)` chunk appears in `shared`. Then do the same with a
   `USER.md` entry, which should still appear.

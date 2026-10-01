@@ -55,8 +55,9 @@ Your config is `/opt/data/cognee.json`:
 
 Being rolled out from 2026-10-01: `memory_write_targets: ["user"]`. Every
 built-in memory write used to be copied into `shared`. With this key, `USER.md`
-entries still are, but `MEMORY.md` entries (your notes on your own behaviour)
-stay Hermes-only. If `cognee.json` lacks the key, they still leak.
+entries (the user's preferences and expectations) still are, but `MEMORY.md`
+entries (facts about your environment) stay Hermes-only. If `cognee.json` lacks
+the key, `MEMORY.md` entries are still copied.
 
 The backend runs with `CACHING=false` (since 2026-09-30). Cognee keeps no
 session Q&A history, so the injected `## Cognee Memory` block has no
