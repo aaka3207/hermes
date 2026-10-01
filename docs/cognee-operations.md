@@ -1436,6 +1436,27 @@ Hermes uses (`top_k` 5, `scope: ["graph"]`). Two runs gave the same result:
   ch.id`. That returned both Yasmeen chunks, across the split aliases `yasmeen`
   and `yasmeen akashe`. No recall mode Hermes uses goes from entity to chunk
   text this way.
+- **The lookup, prototyped 2026-10-01** (`scripts/cognee/entity_pivot.py`):
+  match entity names against the question's words, weighted so a name in every
+  chunk counts for little, then return the linked chunks. It takes 0.1s and
+  needs no LLM. Cognee 1.6.1 has no such mode: `HYBRID_COMPLETION` searches
+  chunks and entities side by side but never follows one to the other. On the
+  17 questions (47 chunks by then), counting questions fully answered:
+
+  | depth | `CHUNKS` | lookup alone | `CHUNKS` + lookup | `CHUNKS` + `CHUNKS_LEXICAL` |
+  |---|---|---|---|---|
+  | 2 | 15 | 11 | 17 | 16 |
+  | 3 | 16 | 12 | 17 | 16 |
+  | 5 | 17 | 12 | 17 | 17 |
+
+  The one question where the lookup beat keyword search (PTO on Oct 23) was
+  luck: it matched only `ameer akashe`, `ameers mother` and `ameer`, and the
+  family record ranks first for nearly any question about Ameer. Without that
+  question, the lookup does exactly as well as keyword search. Alone it misses
+  any question that names no entity (antibiotic, father, "the company that
+  bought his startup"). Extraction noise shows in the matches too: a junk
+  entity `ameers mother`, the `ameer` / `ameer akashe` split, and
+  `light.kitchen_light` matching "Kitchen Cubes".
 - The hybrid block works because it starts with chunk passages. Its graph sections
   contributed one unique hit, "Ameer Akashe has sister Yasmeen Akashe", which
   matched a name but did not answer the question.
