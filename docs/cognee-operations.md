@@ -1197,10 +1197,16 @@ profile already doing it, and only *deletes* from `.env`.
 
 ## 10. Current live state
 
-### Pending: `MEMORY.md` writes kept out of `shared`, 2026-10-01
+### `MEMORY.md` writes kept out of `shared`, 2026-10-01
 
-**Not live yet.** It takes effect once the image is rebuilt and the config key is
-set.
+Live 2026-10-01 at 10:36 (host time). Hermes was redeployed with fork `7343d4f`
+(confirmed from the installed package's `direct_url.json`), the key was set in
+`cognee.json`, and `load_config` returns `memory_write_targets = ['user']`. The
+same run applied `patch_hermes_memory_files.py` (SOUL.md 10043 -> 10552, USER.md
+1257 -> 1364, MEMORY.md 1431 -> 1135 characters; backups
+`*.bak-cognee-setup-20261001-103602`) and installed the `cognee-setup` skill.
+The live write test below has not been run: USER.md has 11 characters spare,
+too few for a throwaway entry.
 
 The plugin's `on_memory_write` copied every Hermes built-in memory write into
 `shared`, for both targets: `user` (`USER.md`) and `memory` (`MEMORY.md`). By
@@ -1216,7 +1222,7 @@ quirks, config, paths), which is useless to Claude Desktop.
   user expectation that was filed in the wrong place.
   `scripts/cognee/patch_hermes_memory_files.py` moves it to `USER.md`, so the
   shared copy is correct and stays.
-- **Verify:** add a throwaway `MEMORY.md` entry in Hermes and confirm no new
+- **Verify (not yet run):** add a throwaway `MEMORY.md` entry in Hermes and confirm no new
   `Hermes memory memory (...)` chunk appears in `shared`. Then do the same with a
   `USER.md` entry, which should still appear.
 - **Rollback:** remove the key, or repin to `1e01471`.
