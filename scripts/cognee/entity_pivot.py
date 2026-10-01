@@ -28,8 +28,10 @@ The lookup:
    chunk scores the sum of its matched entities' weights.
 
 The report compares, at depth k = 2, 3 and 5, ``CHUNKS`` alone with ``CHUNKS``
-top k plus the lookup's top k (de-duplicated). Low k stands in for a crowded
-store, where the right record falls below the cut.
+top k plus the lookup's top k. Low k stands in for a crowded store, where the
+right record falls below the cut. The lookup matches names by their words, so
+the control is ``CHUNKS`` plus ``CHUNKS_LEXICAL`` (keyword search) at the same
+depth: if the lookup does no better than that, the graph adds nothing.
 """
 import json
 import math
@@ -75,8 +77,8 @@ class Graph:
                          "scope": ["graph"]})
         return [[cell["value"] for cell in r["raw"]["value"]] for r in res]
 
-    def chunks(self, query, k):
-        res = self.post({"query": query, "search_type": "CHUNKS", "datasets": ["shared"],
+    def chunks(self, query, k, search_type="CHUNKS"):
+        res = self.post({"query": query, "search_type": search_type, "datasets": ["shared"],
                          "scope": ["graph"], "top_k": k})
         return [(r.get("raw") or {}).get("id") or r.get("text", "")[:80] for r in res], \
                [r.get("text", "") for r in res]
@@ -128,9 +130,10 @@ def main():
     print("index: %d entities over %d chunks in %.1fs\n" % (len(index), n_chunks, time.time() - t0))
 
     ks = (2, 3, 5)
-    totals = {("chunks", k): 0 for k in ks} | {("union", k): 0 for k in ks} | {("pivot", k): 0 for k in ks}
+    totals = {(m, k): 0 for m in ("chunks", "pivot", "union", "lexical") for k in ks}
     for kind, q, facts in QUESTIONS:
         _, ctexts = g.chunks(q, 5)
+        _, ltexts = g.chunks(q, 5, "CHUNKS_LEXICAL")
         t1 = time.time()
         _, ptexts, names = pivot(g, q, index, n_chunks, 5)
         pdt = time.time() - t1
@@ -139,17 +142,22 @@ def main():
             c = all(hits("\n".join(ctexts[:k]), facts))
             p = all(hits("\n".join(ptexts[:k]), facts))
             un = all(hits("\n".join(ctexts[:k] + ptexts[:k]), facts))
+            lx = all(hits("\n".join(ctexts[:k] + ltexts[:k]), facts))
             totals[("chunks", k)] += c
             totals[("pivot", k)] += p
             totals[("union", k)] += un
-            cells.append("k%d %s%s%s" % (k, "C" if c else "-", "P" if p else "-", "U" if un else "-"))
+            totals[("lexical", k)] += lx
+            cells.append("k%d %s%s%s%s" % (k, "C" if c else "-", "P" if p else "-",
+                                          "U" if un else "-", "L" if lx else "-"))
         print("%-10s %s  %.1fs | %s | entities: %s" % (
             kind, "  ".join(cells), pdt, q, ", ".join(names[:5]) or "(none)"), flush=True)
 
     print("\nquestions fully answered (of %d)" % len(QUESTIONS))
-    print("k   CHUNKS  lookup  CHUNKS+lookup")
+    print("C = CHUNKS, P = lookup, U = CHUNKS+lookup, L = CHUNKS+CHUNKS_LEXICAL")
+    print("k   CHUNKS  lookup  CHUNKS+lookup  CHUNKS+lexical")
     for k in ks:
-        print("%d   %5d   %5d   %5d" % (k, totals[("chunks", k)], totals[("pivot", k)], totals[("union", k)]))
+        print("%d   %5d   %5d   %8d      %8d" % (k, totals[("chunks", k)], totals[("pivot", k)],
+                                              totals[("union", k)], totals[("lexical", k)]))
 
 
 if __name__ == "__main__":
