@@ -897,7 +897,7 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 #
 # Installed from a FORK, not from PyPI and not from upstream. The fork is
 # `aaka3207/cognee-integrations`, pinned to a full commit sha on its `main`
-# (PRs #1-#4, squash-merged). Pin the merged commit, not the topic branch's tip: the
+# (PRs #1-#4 squash-merged, then `7343d4f` pushed directly). Pin the merged commit, not the topic branch's tip: the
 # squash orphans that tip, and an orphaned sha is fetchable only until GitHub
 # garbage-collects it. The subtree was compared before repinning -- the squashed
 # `integrations/hermes-agent` tree is byte-identical to the branch tip's.
@@ -942,8 +942,13 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 #      would have answered from, and the agent writes the answer. No answer
 #      is generated, so none is saved to the session. Verified on 1.6.1:
 #      cache_qa_entries did not move.
+#   7. `memory_write_targets` (fork `7343d4f`). `on_memory_write` copies every
+#      built-in memory add/replace into the dataset; this names which targets
+#      to copy. Set to ["user"] so USER.md facts reach the shared store and
+#      MEMORY.md, the agent's notes on its own behaviour, does not -- Desktop
+#      recalled a Hermes behaviour rule as a fact about the user.
 #
-# Return to PyPI when a release carries 1-6. They are separable and intended to
+# Return to PyPI when a release carries 1-7. They are separable and intended to
 # go upstream, except `notion_pointer.py`; commit 1 is
 # `topoteretes/cognee-integrations#436`.
 # Until then: rebase the fork onto upstream rather than cherry-picking, and move
@@ -962,7 +967,7 @@ RUN /opt/hermes/.venv/bin/python -m py_compile \
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
         --exclude-newer-package "cognee=2026-09-19T00:00:00Z" \
         --exclude-newer-package "enola-cli=2026-09-19T00:00:00Z" \
-        "cognee-integration-hermes-agent @ git+https://github.com/aaka3207/cognee-integrations.git@1e01471e7131d57fac49b2fb366648427be511dd#subdirectory=integrations/hermes-agent" \
+        "cognee-integration-hermes-agent @ git+https://github.com/aaka3207/cognee-integrations.git@7343d4f10b549622c4ff3688e7ef7a4691af579b#subdirectory=integrations/hermes-agent" \
         "packaging==26.0" && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-cloud-smoke.py && \
     /opt/hermes/.venv/bin/python /opt/hermes/docker/cognee-remember-filename.py

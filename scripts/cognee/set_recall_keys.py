@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Set the two recall keys the forked cognee plugin adds, on one profile.
+"""Set the config keys the forked cognee plugin adds, on one profile.
 
     docker exec -u hermes <hermes> python3 /tmp/set_recall_keys.py \
         /opt/data/cognee.json --commit
 
-Dry run by default. Both keys only exist in the fork pinned at `Dockerfile:897`
+Dry run by default. These keys only exist in the fork pinned in the `Dockerfile`
 (`aaka3207/cognee-integrations`), so **run this only against an image built from
 that pin** -- against the old plugin they are inert, `load_config` carries any
 key through and only a key the code reads has an effect.
@@ -22,6 +22,10 @@ What they do, and why the obvious alternatives are wrong:
   ``improve_on_end: false`` does not -- it governs only promotion into the
   permanent dataset at session end. Measured: with ``improve_on_end`` already
   off, both session tables truncated to zero refilled within five minutes.
+* ``memory_write_targets: ["user"]`` (fork ``7343d4f``) copies only USER.md
+  writes into the shared dataset. Unset, every built-in memory write is copied,
+  so MEMORY.md -- Hermes's notes on its own behaviour -- reached Claude Desktop
+  as if it were a fact about the user.
 
 Idempotent. Reports a no-op when the values already match, and refuses to change
 a value that is already set to something else rather than silently overriding a
@@ -39,7 +43,8 @@ import sys
 import tempfile
 import time
 
-WANTED = {"search_type": "CHUNKS", "session_writes": False}
+WANTED = {"search_type": "CHUNKS", "session_writes": False,
+          "memory_write_targets": ["user"]}
 
 
 def main():

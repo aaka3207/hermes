@@ -1197,6 +1197,27 @@ profile already doing it, and only *deletes* from `.env`.
 
 ## 10. Current live state
 
+### Pending: `MEMORY.md` writes kept out of `shared`, 2026-10-01
+
+**Not live yet.** It takes effect once the image is rebuilt and the config key is
+set.
+
+The plugin's `on_memory_write` copied every Hermes built-in memory write into
+`shared`, for both targets: `user` (`USER.md`) and `memory` (`MEMORY.md`, Hermes's
+notes on its own behaviour). Claude Desktop recalled one of those notes, a
+career-drafting rule, as if it were a fact about the user.
+
+- **The fix:** fork `7343d4f` adds `memory_write_targets`, and the Dockerfile now
+  pins it. `scripts/cognee/set_recall_keys.py` sets the key to `["user"]`; it is
+  inert on the old image, so the order doesn't matter.
+- **Cleanup:** the one leaked record is data
+  `f8f24920-8719-46a5-9c79-0001b40d79d3` in `shared` (written 2026-09-30). Forget
+  it after deploying (§9, bulk retraction).
+- **Verify:** add a throwaway `MEMORY.md` entry in Hermes and confirm no new
+  `Hermes memory memory (...)` chunk appears in `shared`. Then do the same with a
+  `USER.md` entry, which should still appear.
+- **Rollback:** remove the key, or repin to `1e01471`.
+
 ### Session caching turned off, 2026-09-30
 
 `CACHING=false` added to `cognee-backend` in Coolify's inline compose (it is not

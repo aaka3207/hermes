@@ -53,6 +53,11 @@ Your config is `/opt/data/cognee.json`:
 | `improve_on_end` | `false` | no session-end promotion into the dataset |
 | `write_metadata` | `true` | each write carries `created_at`, `created_by`, session, `notion_page_id` |
 
+Being rolled out from 2026-10-01: `memory_write_targets: ["user"]`. Every
+built-in memory write used to be copied into `shared`. With this key, `USER.md`
+entries still are, but `MEMORY.md` entries (your notes on your own behaviour)
+stay Hermes-only. If `cognee.json` lacks the key, they still leak.
+
 The backend runs with `CACHING=false` (since 2026-09-30). Cognee keeps no
 session Q&A history, so the injected `## Cognee Memory` block has no
 "Previous conversation" layer any more. Old session rows expire by 2026-10-07.
