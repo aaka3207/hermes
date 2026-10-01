@@ -1,7 +1,7 @@
 ---
 name: cognee-setup
 description: "How the self-hosted cognee memory backend is built and configured, its known traps, and how to diagnose slow, wrong or missing recall. Load before explaining or troubleshooting tier-3 memory."
-version: 0.1.0
+version: 0.2.0
 author: Hermes Agent
 license: MIT
 platforms: [linux]
@@ -84,10 +84,21 @@ session Q&A history, so the injected `## Cognee Memory` block has no
   `ameer` and `ameer akashe` can be separate nodes with nothing linking them.
   A graph answer that misses half the facts about a person may be this.
 - `forget` and dataset deletes are permanent. Production writes and deletes
-  go to the user first, with the exact command.
-- Records are dated assertions, never edited. A newer record supersedes an
-  older one by saying so; both stay in the store. When two records disagree,
-  prefer the newer `created_at` and the Notion page it points to.
+  go to the user first, with the exact command. Only ever `forget` with both
+  `data_id` and `dataset_id`: a dataset alone, or `everything`, deletes a whole
+  store.
+- Records are dated assertions, never edited in place. To correct or supersede
+  one, write a new record that says so and, once the user approves, retire the
+  old one (`references/maintenance.md`). Until it is retired, both stay in the
+  store and compete in `CHUNKS`. When two records disagree, prefer the newer
+  `created_at` and the Notion page it points to.
+
+## Maintaining the store
+
+Load `references/maintenance.md` before proposing or doing a merge or a
+retirement, and before writing a pointer record. It covers what counts as a
+cluster, how to write a record so it can be found, and the merge procedure.
+Proposals only: the user approves every merge.
 
 ## Diagnosing
 
