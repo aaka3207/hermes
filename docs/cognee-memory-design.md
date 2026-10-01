@@ -1218,6 +1218,48 @@ is an early reading, not the verdict.
   2026-10-14. Then record the graph's keep-or-drop in §11 of
   `cognee-operations.md`. If the graph earns nothing, §0's case for a cheaper
   backend stands.
+* 2026-10-01: the evidence so far does not support the `context_only` bullet
+  above. On 17 questions `context_only` answered 14 to `CHUNKS`' 17, including
+  the broad and relational ones, and on "health goals" it was worse than
+  `CHUNKS` (§11 of `cognee-operations.md`). Use `CHUNKS` for broad questions too
+  until the 2026-10-14 re-run says otherwise.
+
+### Consolidation (proposed 2026-10-01, not built)
+
+The concern: as `shared` grows, `CHUNKS` keeps only the top 5, and three things
+push the right record out:
+* superseded versions pile up, because records are never edited (the ENT date
+  already has three);
+* records that start alike compete ("[claude-desktop] Ameer's X, exported...",
+  nine near-identical therapy "Pointer" records on 2026-10-01);
+* broad questions have no single record to find ("health goals").
+
+Better ranking only sorts the pile. Consolidation shrinks it, like Mnemosyne's
+`sleep` (compress old memories into summaries) and `invalidate` (mark one
+superseded, linked to its replacement). Cognee has neither:
+`distill_sessions` turns sessions into records, not records into fewer records,
+and `consolidate_entities` merges graph nodes destructively.
+
+So it would be a scheduled job, shaped like the existing "Cognee to Notion
+filing" cron:
+1. Group `shared` records by topic (health, ENT, PTO, Joyce, finances).
+2. Per group, an LLM writes one current-state record. It lists the ids and
+   dates of the records it replaces, says what changed ("Oct 20 -> Nov 2, per
+   2026-09-30"), and points to the Notion page as the source of truth.
+3. The replaced records move to an `archive` dataset instead of being deleted:
+   recall searches `shared` only, so they stop competing, but a bad merge can
+   be undone.
+
+The risk is the one `CHUNKS` was chosen to avoid: an LLM rewrite paraphrases
+names, ids and dates. Guards:
+* the script checks that every identifier, URL and date in the sources appears
+  verbatim in the merged record before anything is archived;
+* every merge is reviewed by the user before the archive step, which is a
+  production write and gated anyway.
+
+First step: a dry run on `shared` that writes nothing and shows proposed merges,
+starting with health. Then a throwaway-dataset run, re-scored with
+`graph_vs_chunks.py`, before anything touches `shared`.
 
 ### Open
 
@@ -1226,3 +1268,5 @@ is an early reading, not the verdict.
   Its completions no longer pollute anything, but they still paraphrase.
 * The glossary commit: revisit only if the comparison says the graph is worth
   keeping.
+* Consolidation: whether to build the dry run, and whether consolidated records
+  should replace the graph's role for broad questions.

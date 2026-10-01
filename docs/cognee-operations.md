@@ -1457,6 +1457,23 @@ Hermes uses (`top_k` 5, `scope: ["graph"]`). Two runs gave the same result:
   bought his startup"). Extraction noise shows in the matches too: a junk
   entity `ameers mother`, the `ameer` / `ameer akashe` split, and
   `light.kitchen_light` matching "Kitchen Cubes".
+- **A broad question, "health goals" (2026-10-01, 47 chunks), went badly for
+  every mode.** No record states the goals; they are spread across the fitness
+  record (Fall Build targets, dentist), the ENT plan, the sleep study (written
+  2026-10-01) and the therapy pointers.
+
+  | mode | what came back |
+  |---|---|
+  | `CHUNKS` | Fall Build targets first; 4 of 5 results about workouts; no ENT or sleep study |
+  | `CHUNKS_LEXICAL` | matched the word "health": ENT plan, Hopemark therapy pointers, chest day; targets last |
+  | hybrid block (`only_context`) | entities section matched organisation names (Health HQ, Hopemark Health, HealthPartners, Apple Health), none of them goals; one good graph fact, the Fall Build targets, already `CHUNKS` #1 |
+  | `GRAPH_COMPLETION` answer | wrong: answered "what is Health HQ's goal" |
+  | entity lookup | only the "health"-named organisations; missed the fitness record |
+
+  Nothing returned the sleep study. A keyword that appears in entity names
+  floods the graph with irrelevant entities, so the graph made this question
+  worse. Retrieval cannot fix a missing summary: the answer needs a record that
+  states the goals. That is the case for consolidation (design doc §17).
 - The hybrid block works because it starts with chunk passages. Its graph sections
   contributed one unique hit, "Ameer Akashe has sister Yasmeen Akashe", which
   matched a name but did not answer the question.
