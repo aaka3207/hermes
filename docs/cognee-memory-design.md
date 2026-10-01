@@ -949,6 +949,7 @@ What remains a defect is the *content* of the history layer -- stale prior
 answers presented as memory -- and its source is still the open question above:
 the session tables, or conversational answers already cognified into the graph.
 That has to be established before anything is deleted or patched.
+(Established 2026-09-30: the session tables. See §17.)
 
 The verbatim rule in `SOUL.md` was corrected the same day for this reason. As
 first written it said "recall returns stored text", which licenses exactly the
@@ -989,7 +990,9 @@ URL is worse than no record, because it reads as usable.
 * ~~The lane's hardcoded `HYBRID_COMPLETION` and `top_k` -- a fifth fork
   commit.~~ Withdrawn 2026-09-29: the search type is upstream design (see the
   correction above). Replaced by: **where does the injected history come
-  from** -- session tables or the graph?
+  from** -- session tables or the graph? Answered 2026-09-30: the
+  session tables, filled by Desktop's session-less completions; turned off
+  with `CACHING=false` (§17).
 * Reconciling the memory steer with `SOUL.md`, or disabling it
   (`memory_steer: false`).
 * Whether the rewritten pointer records ever become recallable.
@@ -1031,7 +1034,8 @@ Verified on the first live write. Operational detail and rollback are in
   the default, the graph's readers are:
   * the injected block (`HYBRID_COMPLETION`, graph plus LLM), which is the
     lane `SOUL.md` says not to trust;
-  * any explicit `GRAPH_COMPLETION` call;
+  * any explicit `GRAPH_COMPLETION` call, or since 2026-09-30 a
+    `context_only` recall (§17);
   * possibly Claude Desktop's MCP recall. Its default search type has not been
     checked.
 * **Completion modes still paraphrase.** Metadata does not make a synthesised
@@ -1054,5 +1058,165 @@ chooses rather than following a rule it cannot see the reason for:
 * **Does Hermes ever choose `GRAPH_COMPLETION`?** Count explicit
   `cognee_recall` calls by `search_type` over a week or two. If it almost never
   does, the graph is paid for on every write and read only by the injected
-  block, which strengthens the case in §0 for a cheaper backend.
+  block, which strengthens the case in §0 for a cheaper backend. Superseded
+  2026-09-30 by the `CHUNKS` versus `context_only` comparison in §17.
 * Claude Desktop's recall mode and the missing MCP metadata parameter.
+
+## 17. Session memory off, and what the graph is worth, 2026-09-30
+
+### Where the injected history came from
+
+§15 left this open. The answer: **cognee's session cache, filled by completion
+recalls that sent no session id.** The pile was Desktop's, not Hermes's.
+
+* Every completion recall (`GRAPH_COMPLETION`, `HYBRID_COMPLETION`, ...) that
+  carries no `session_id` saves its LLM answer to
+  `default_session_<dataset_id>`. That is table `cache_qa_entries` in
+  `/cognee-storage/system/databases/cache.db`, mirrored as
+  `SessionQAVector_text` rows in the dataset's Postgres DB.
+* The latest writes came from `10.0.1.16`, which is `cognee-mcp` on the
+  `coolify` network: **Claude Desktop.** Each stored answer lists the earlier
+  answers it read, so Desktop's completions kept reading its own earlier
+  answers back in.
+* Hermes always sends `hermes_<session>`, and since `session_writes: false` it
+  had saved nothing new.
+* The 2026-09-27 measurement in §15 (31% history, two contradictory dates)
+  probed with `session_id=""`. That resolves to the default session, **so it
+  measured Desktop's pile, not Hermes's lane.**
+* The source was the session tables, not cognified answers in the graph.
+* Entries carry `expires_at` = created + 7 days. The pile ages out by itself.
+
+### The stall: AUTO_FEEDBACK
+
+Hermes's first `context_only` recall (below) took 64.98s. The same request with
+a fresh session id took 2s.
+
+* **What it is.** `CACHING` and `AUTO_FEEDBACK` both default to true. With both
+  on, every completion recall that carries a session id first runs
+  `feedback_detection.analyze_turn_for_session_context`, a structured-output LLM
+  call.
+* **No timeout.** It fails open only on an error, never on slowness. The logs
+  show nothing during the stall.
+* **Measured.** Of 74 `cognee_recall` calls in Hermes's `agent.log`, 8 took over
+  10s. The per-prompt lane requests finish 25-60s after the turn starts.
+  Vector and graph retrieval themselves took about 1.3s. `CHUNKS` calls skip
+  this path and take about 0.4s.
+
+### The fix: `CACHING=false`
+
+Set on `cognee-backend` 2026-09-30 16:22Z. It subsumes `AUTO_FEEDBACK=false`,
+and it also turns off session history, answer saving and session context.
+
+Nothing here needs session memory:
+* Hermes keeps transcripts in hermes-lcm (tier 2).
+* `session_writes` was already false.
+* The only live writer was Desktop's default-session pile.
+
+| probe after the change | time | history in context |
+|---|---|---|
+| `context_only` on the session holding the bad Q&A | 1.2-1.4s | none |
+| `HYBRID_COMPLETION` with `only_context` (the lane) | 0.5s | none |
+| plain `GRAPH_COMPLETION`, no session (Desktop's shape) | 4.0s | not saved |
+
+`cache_qa_entries` stayed at 67 rows and `cache_session_context` at 172 across
+every probe. The existing rows are inert and expire by 2026-10-07.
+
+This closes most of the §15 history-layer problem. **The injected block now
+carries graph context only.**
+
+### Context-only recall
+
+The completion modes made a graph read cost an LLM paraphrase. Fork PR #4
+(`1e01471`, hermes #41) added a `context_only` argument to `cognee_recall`. It
+runs `GRAPH_COMPLETION` (or another completion type the caller names) with
+`only_context=True`. That returns the related entities, relationships and
+stored passages verbatim, and the agent answers from them itself. Verified
+live: 9.2k-12k characters of context per call, and no Q&A saved.
+
+**Caveat.** Part of that context is `TextSummary` nodes, which an LLM wrote at
+cognify time. Context-only is less paraphrased than a completion, not
+paraphrase-free. Anything acted on still goes through `CHUNKS`.
+
+### Extraction never sees the existing graph
+
+**Why the graph splits entities.**
+* The extraction LLM sees only `chunk.text`.
+* Node ids are `uuid5` of the lower-cased, underscored name.
+* So `ameer` and `ameer akashe` become two nodes, and nothing links them.
+
+**Upstream history.** Research report:
+`claudedocs/research_cognee_entity_linking_20260929.md`. Upstream never states
+why extraction works this way; idempotency and order-independence are the
+likely reasons.
+* A prefetch POC that added the nearest existing names to the prompt was
+  deleted on 2026-08-12.
+* PR #4106 (canonicalisation inside cognify) was closed unmerged.
+* The maintainers' answer is `consolidate_entities`, a post-hoc merge in 1.6.1.
+  It is a poor fit here:
+  * it is destructive, with no dry run over HTTP;
+  * it keeps no alias record, so the next write re-creates the duplicate;
+  * its fuzzy mode merged wrong entities 30-46% of the time.
+
+**The client-side trial.** `/api/v1/remember` takes a per-call `custom_prompt`
+that *replaces* the system prompt. So the plugin could send the default graph
+prompt plus an "existing entities" list without any server change.
+`scripts/cognee/entity_glossary_trial.py` A/B-tested this on throwaway datasets
+(2 runs x 12 alias-laden records), since deleted:
+
+| | baseline | glossary |
+|---|---|---|
+| `ameer` / `ameer akashe` nodes | split 4/2 in both runs | 6/0 and 5/1 |
+| `cognee backend` -> `cognee`, `hevy app` -> `hevy` | separate | merged |
+| `ntn cli` / `notion cli (ntn)` | separate | merged in 1 of 2 runs |
+| "the user" -> Ameer | never | never |
+| wrong merges | -- | none seen |
+| entities | 33 | 30, 31 |
+
+No added latency (2-4s per write). The trial's glossary count includes 14
+bullet lines from the default prompt itself. That is a display bug and does
+not affect the merge counts.
+
+**The verdict: it helps, but not enough to be the only fix.** Parked, not
+forked. Untested: choosing the top-k names at the scale of the real `shared`
+graph.
+
+**Name lookup over HTTP works, so no core change would be needed.**
+* All names: `POST /api/v1/recall`, `search_type: "CYPHER"`,
+  `MATCH (n:Node) WHERE n.type = 'Entity' RETURN n.name`. Returned all 231
+  `shared` entities in 0.9s. `ALLOW_CYPHER_QUERY` defaults to on, and the query
+  is raw.
+* Nearest names: `GET /api/v1/visualize/json` with `query`,
+  `neighborhood_depth=1` (the minimum) and `neighborhood_seed_top_k`. Takes
+  about 0.5s. It is a UI endpoint, so it is less stable.
+* Dead end: `PUT /datasets/{id}/schema` stores a `custom_prompt` that the write
+  path never reads.
+
+### Graph versus CHUNKS on one real question
+
+On the question that started this (the ENT appointment and the PTO it needs):
+* `CHUNKS` ranked the same records the graph context surfaced, in its top 3.
+* The graph did not find anything `CHUNKS` missed. It only left out the
+  irrelevant tail.
+* An earlier claim that the graph surfaced the PTO record and `CHUNKS` would
+  miss it was wrong: `CHUNKS` ranked it #3.
+
+One question settles nothing either way.
+
+### Plan
+
+* `CHUNKS` stays the default for anything acted on.
+* `context_only` replaces plain `GRAPH_COMPLETION` for broad and relational
+  questions. The `SOUL.md` line saying so was handed over on 2026-09-30; it is
+  not confirmed applied.
+* Compare `CHUNKS` with `context_only` on real questions until about
+  2026-10-14. Then record the graph's keep-or-drop in §11 of
+  `cognee-operations.md`. If the graph earns nothing, §0's case for a cheaper
+  backend stands.
+
+### Open
+
+* Whether `SOUL.md` carries the `context_only` guidance.
+* Whether Desktop's recall should move to `context_only` or stay on `CHUNKS`.
+  Its completions no longer pollute anything, but they still paraphrase.
+* The glossary commit: revisit only if the comparison says the graph is worth
+  keeping.

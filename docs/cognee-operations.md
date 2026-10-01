@@ -822,6 +822,27 @@ Apache-2.0). Mnemosyne also ships a `write_classifier` in
 `mnemosyne/core/filters.py` — the LLM-grade version of the same idea, also
 provider-scoped, also unavailable here.
 
+### Completion recalls stalled for up to a minute
+
+**Symptom.** A `GRAPH_COMPLETION` or `HYBRID_COMPLETION` recall from Hermes
+took 25-65s while `CHUNKS` took 0.4s. Health checks kept answering, and the
+backend log showed nothing during the wait. The same request with a fresh
+session id returned in 2s.
+
+**Cause.** `CACHING` and `AUTO_FEEDBACK` both default to true. With both on,
+every completion recall that carries a session id first runs a turn-analysis
+LLM call (`feedback_detection.analyze_turn_for_session_context`), and that call
+has no timeout. The same flags save every session-less completion answer to
+`default_session_<dataset_id>` and feed it back into later contexts as
+"Previous conversation". That is where the stale history in the injected block
+came from (design doc §17).
+
+**Fix.** `CACHING=false` on `cognee-backend`, applied 2026-09-30. It is in the
+repo compose with its reason (§10 has the verification). If a completion recall
+is slow again, first check `docker exec <backend> env | grep -E
+'CACHING|AUTO_FEEDBACK'`. A probe with a fresh session id versus a real one tells
+this stall apart from a slow LLM.
+
 ---
 
 ## 8. Seeding from Mnemosyne
@@ -1169,6 +1190,47 @@ profile already doing it, and only *deletes* from `.env`.
 
 ## 10. Current live state
 
+### Session caching turned off, 2026-09-30
+
+`CACHING=false` added to `cognee-backend` and the backend restarted at 16:22Z.
+The live container env shows `CACHING=false`, with `AUTO_FEEDBACK` unset
+(caching off makes it moot). Cause and reasoning are in §7 and design doc §17.
+
+- **The repo compose now carries the line too**
+  (`deploy/cognee-selfhost.compose.yaml`). Before this change it did not, so a
+  paste of the old repo compose into Coolify would have silently turned caching
+  back on. Keep the two in step.
+- Verified with direct recalls against `shared`:
+
+  | probe | time | result |
+  |---|---|---|
+  | `context_only` on the session holding the bad Q&A | 1.2-1.4s | no "Previous conversation" |
+  | `HYBRID_COMPLETION` with `only_context` | 0.5s | no history |
+  | plain `GRAPH_COMPLETION`, no session | 4.0s | answer not saved |
+
+  `cache_qa_entries` stayed at 67 rows and `cache_session_context` at 172 across
+  every probe. The rows already there are inert and expire by 2026-10-07.
+- **Rollback:** remove the variable and restart the backend. Session history,
+  answer saving and the turn-analysis stall all come back.
+
+### `context_only` recall deployed, 2026-09-30
+
+Hermes redeployed with the plugin pinned at fork `1e01471` (fork PR #4,
+hermes #41). `cognee_recall` gained a `context_only` argument. It runs
+`GRAPH_COMPLETION` (or another completion type the caller names) with
+`only_context=True`, so it returns the graph context verbatim instead of an LLM
+answer.
+
+- Verified through the provider inside the live container: the tool schema
+  carries the argument, 9.2k-12k characters of context come back, and no Q&A
+  is saved.
+- The first live call took 65s. That was the stall in §7, fixed by the entry
+  above.
+- `SOUL.md` guidance (prefer `context_only` over plain `GRAPH_COMPLETION` for
+  broad questions) was handed over; not confirmed applied.
+- Rollback: repin the Dockerfile to `32bb76b` and redeploy. Nothing else reads
+  the argument.
+
 ### Write metadata turned on, 2026-09-29
 
 Hermes redeployed with the plugin pinned at fork `32bb76b` (hermes #40), then
@@ -1300,3 +1362,9 @@ Mnemosyne.
 An evaluation with no recorded verdict becomes the status quo by default, and
 every day it runs unrecorded, the Mnemosyne store goes staler and the
 rollback in §9 costs more. Set a date to come back to this.
+
+**Graph question added 2026-09-30, due about 2026-10-14.** A separate call from
+the Mnemosyne one: is cognee's graph worth its cost per write? Compare `CHUNKS`
+with `context_only` recall on real questions (design doc §17). Record here
+whether the graph found anything `CHUNKS` missed. If it never did, the graph is
+paying for nothing, and §0 of the design doc argues for a cheaper backend.
