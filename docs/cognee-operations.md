@@ -258,11 +258,18 @@ Useful `search_type` values: `GRAPH_COMPLETION` (default, synthesized answer),
 | Layer | File / place | Scope |
 |---|---|---|
 | Stack definition | `deploy/cognee-selfhost.compose.yaml` (this repo) | source of truth — **not** auto-deployed, see below |
-| Secrets | Coolify service env vars | container-wide |
+| Secrets | Coolify service env vars | container-wide, injected into every container |
 | Domains | Coolify UI **Domains** field | per sub-service |
 | Hermes provider | `/opt/data/cognee.json` | **personal profile** |
 | Hermes provider | `/opt/data/profiles/dinefile/cognee.json` | **`dinefile` profile** |
 | Dataset overrides | `dataset-overrides.json` | per profile |
+
+**One setting lives only in Coolify:** `TELEMETRY_DISABLED`, a service env var
+added 2026-09-26. Coolify injects every service env var into every container,
+so it reaches the backend without any line in the compose. It is the only
+non-secret setting outside the repo; the rest of that layer is the six
+`COGNEE_*` secrets and `OPENROUTER_API_KEY`, which the compose interpolates.
+Pasting the repo compose does not remove it. Deleting the service would.
 
 **Committing the compose does not deploy it.** This stack is a Coolify
 *Service* whose compose is stored **inline** in Coolify (`docker_compose_raw`),
@@ -1192,9 +1199,10 @@ profile already doing it, and only *deletes* from `.env`.
 
 ### Session caching turned off, 2026-09-30
 
-`CACHING=false` added to `cognee-backend` and the backend restarted at 16:22Z.
-The live container env shows `CACHING=false`, with `AUTO_FEEDBACK` unset
-(caching off makes it moot). Cause and reasoning are in §7 and design doc §17.
+`CACHING=false` added to `cognee-backend` in Coolify's inline compose (it is not
+a service env var; checked 2026-10-01) and the backend restarted at 16:22Z. The
+live container env shows `CACHING=false`, with `AUTO_FEEDBACK` unset (caching
+off makes it moot). Cause and reasoning are in §7 and design doc §17.
 
 - **The repo compose now carries the line too**
   (`deploy/cognee-selfhost.compose.yaml`). Before this change it did not, so a
