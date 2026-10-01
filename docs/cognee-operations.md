@@ -1205,8 +1205,10 @@ Live 2026-10-01 at 10:36 (host time). Hermes was redeployed with fork `7343d4f`
 same run applied `patch_hermes_memory_files.py` (SOUL.md 10043 -> 10552, USER.md
 1257 -> 1364, MEMORY.md 1431 -> 1135 characters; backups
 `*.bak-cognee-setup-20261001-103602`) and installed the `cognee-setup` skill.
-The live write test below has not been run: USER.md has 11 characters spare,
-too few for a throwaway entry.
+Verified 2026-10-01 15:39Z: Hermes wrote a throwaway `MEMORY.md` entry
+(`zebra-kumquat-7731`); `CHUNKS_LEXICAL` and `CHUNKS` on `shared` found nothing
+and the record count stayed at 32. The `USER.md` half was not run: USER.md has
+11 characters spare, too few for a throwaway entry, and that path is unchanged.
 
 The plugin's `on_memory_write` copied every Hermes built-in memory write into
 `shared`, for both targets: `user` (`USER.md`) and `memory` (`MEMORY.md`). By
@@ -1222,7 +1224,7 @@ quirks, config, paths), which is useless to Claude Desktop.
   user expectation that was filed in the wrong place.
   `scripts/cognee/patch_hermes_memory_files.py` moves it to `USER.md`, so the
   shared copy is correct and stays.
-- **Verify (not yet run):** add a throwaway `MEMORY.md` entry in Hermes and confirm no new
+- **Verify:** add a throwaway `MEMORY.md` entry in Hermes and confirm no new
   `Hermes memory memory (...)` chunk appears in `shared`. Then do the same with a
   `USER.md` entry, which should still appear.
 - **Rollback:** remove the key, or repin to `1e01471`.
