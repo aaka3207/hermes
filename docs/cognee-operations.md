@@ -9,6 +9,10 @@ Supersedes `docs/superpowers/specs/2026-09-20-cognee-selfhost-design.md` for
 anything operational. The spec remains the record of *why*; this is the
 record of *what is actually running*.
 
+For what the memory system is *for* — the cognee/Notion division of labour,
+and the 2026-09-26 measurements showing that recall fails on search-type
+selection rather than on data — see `docs/cognee-memory-design.md`.
+
 The `dinefile` profile is **not** part of this. It stays on Cognee Cloud,
 untouched, and nothing in this document applies to it except §5, which
 explains the one piece of configuration the two profiles share.
@@ -254,11 +258,18 @@ Useful `search_type` values: `GRAPH_COMPLETION` (default, synthesized answer),
 | Layer | File / place | Scope |
 |---|---|---|
 | Stack definition | `deploy/cognee-selfhost.compose.yaml` (this repo) | source of truth — **not** auto-deployed, see below |
-| Secrets | Coolify service env vars | container-wide |
+| Secrets | Coolify service env vars | container-wide, injected into every container |
 | Domains | Coolify UI **Domains** field | per sub-service |
 | Hermes provider | `/opt/data/cognee.json` | **personal profile** |
 | Hermes provider | `/opt/data/profiles/dinefile/cognee.json` | **`dinefile` profile** |
 | Dataset overrides | `dataset-overrides.json` | per profile |
+
+**One setting lives only in Coolify:** `TELEMETRY_DISABLED`, a service env var
+added 2026-09-26. Coolify injects every service env var into every container,
+so it reaches the backend without any line in the compose. It is the only
+non-secret setting outside the repo; the rest of that layer is the six
+`COGNEE_*` secrets and `OPENROUTER_API_KEY`, which the compose interpolates.
+Pasting the repo compose does not remove it. Deleting the service would.
 
 **Committing the compose does not deploy it.** This stack is a Coolify
 *Service* whose compose is stored **inline** in Coolify (`docker_compose_raw`),
@@ -350,13 +361,14 @@ Personal profile `/opt/data/cognee.json`:
   "search_type": "CHUNKS",
   "service_url": "https://cognee.aakashe.org",
   "session_writes": false,
+  "write_metadata": true,
   "api_key": "<the minted Cognee API key>"
 }
 ```
 
-`search_type` and `session_writes` exist only in the forked plugin (see §7,
-"The plugin pins an older cognee than we run"). Both matter more than they
-look:
+`search_type`, `session_writes` and `write_metadata` exist only in the forked
+plugin (see §7, "The plugin pins an older cognee than we run"). All three
+matter more than they look:
 
 * **`search_type: "CHUNKS"`** returns the stored text. Without it the server's
   query classifier routes a short query to an LLM completion over the graph,
@@ -370,6 +382,15 @@ look:
   `improve_on_end: false` does not: it governs only promotion into the
   permanent dataset at session end. With `improve_on_end` already off, both
   session tables truncated to zero refilled within five minutes of normal use.
+* **`write_metadata: true`** attaches cognee `external_metadata` to every
+  permanent write: `created_at`, `created_by` (the `created_by` key, default
+  `"hermes"`), `write_origin` (`cognee_remember` or `hermes_memory_tool`) and
+  `hermes_session_id`. It also offers `cognee_remember` an optional flat
+  `metadata` object. A `notion_page_id` key there must hold a real page id or
+  the write is refused -- the one fork-only check. On cognee >= 1.6.1 the
+  metadata is copied onto the chunks, and `cognee_recall` returns it as
+  `metadata` on each `CHUNKS` result. Completion modes do not show it.
+  Records written before the key was set carry none.
 
 Flip the provider in `/opt/data/config.yaml` (`memory.provider: cognee`) and
 add `cognee` to `plugins.enabled`, then restart the personal gateway alone:
@@ -427,6 +448,40 @@ redeploy, so it is a bridge to a compose fix and not the fix:
 ```bash
 docker network connect <cognee network> <hermes container>
 ```
+
+### Per-profile `cognee.json` beats the container env -- and they disagree
+
+**The container-wide `COGNEE_BASE_URL` points at Cognee Cloud, not at this
+backend.** Reading the env to find the backend sends you to the wrong system.
+The authoritative value is the profile's `cognee.json`, which `load_config`
+overlays on top of every env default (`config.py`: env defaults are built
+first, then `config.update(...)` from `config_path(hermes_home)`).
+
+| profile | file | `service_url` | dataset |
+|---|---|---|---|
+| default | `/opt/data/cognee.json` | `http://cognee-backend:8000` | `shared` |
+| dinefile | `/opt/data/profiles/dinefile/cognee.json` | `https://tenant-acc9068f-....aws.cognee.ai` | `dinefile` |
+
+`HERMES_HOME=/opt/data` for the default profile, so `config_path` resolves to
+`$HERMES_HOME/cognee.json`. The two profiles are fully isolated at this layer:
+**a change to one file cannot affect the other**, which makes this the correct
+place to change cognee behaviour for the personal profile without touching
+dinefile. Coolify-level env vars are shared and are not.
+
+⚠️ **This has already caused one near-miss.** On 2026-09-26 a bulk retraction
+was aimed using `COGNEE_BASE_URL` from the hermes container, and 25 delete
+requests went to the *cloud tenant that hosts dinefile*. They failed only
+because the `datasetId` came from the self-hosted Postgres and does not exist
+there. Nothing was deleted, but nothing prevented it either. Aim writes using
+the profile's `cognee.json`, never the env.
+
+The credential for the self-hosted backend is `COGNEE_MCP_API_TOKEN` (64 chars,
+`x-api-key` scheme), readable as `API_TOKEN` inside the `cognee-mcp` container,
+whose `API_URL` is the same internal `http://cognee-backend:8000`.
+
+The container-wide `COGNEE_*` variables are retired in §9, "Retiring the
+container-wide `COGNEE_*` variables" -- three are dead, and the fourth is
+dinefile's own cloud key sitting where the personal profile can also read it.
 
 ---
 
@@ -606,7 +661,8 @@ how the mismatch below was found, and the check is still the right habit even
 though the mismatch is now closed.
 
 **Resolved 2026-09-27.** The pin moved to the fork
-(`aaka3207/cognee-integrations`, its `main` after PR #1), which is
+(`aaka3207/cognee-integrations`, its `main` after PR #1; since 2026-09-29 after
+PR #3, sha `32bb76b`), which is
 upstream plugin **1.3.0** and declares **`cognee==1.6.0`** — the same version
 the backend ran until 2026-09-29. The backend is now 1.6.1 and the plugin
 still declares 1.6.0; that skew is harmless, because the plugin reaches the
@@ -719,6 +775,80 @@ the patch had failed. Restart both and confirm new pids:
 docker exec <hermes container> sh -c "/command/s6-svc -r /run/service/dashboard; /command/s6-svc -r /run/service/gateway-default"
 docker exec <hermes container> sh -c "ps -eo pid,etime,args | grep -E 'hermes (dashboard|gateway run)' | grep -v grep"
 ```
+
+### The cognee provider has no write-time content filter
+
+**`ignore_patterns` is a Mnemosyne feature, and switching the provider
+silently orphaned it.** `/opt/data/config.yaml` still carries eleven patterns
+under `memory.mnemosyne.ignore_patterns` — four shapes of bounded Gmail
+monitor prompt, the scheduled-cron preamble, the cron monitor, the Home
+Assistant weight sync, the Hevy weekly report, the Career Hub reminder. With
+`provider: cognee` they are dead:
+
+* `hermes_memory_provider/__init__.py:1670` — `_read_config_key` reads
+  `memory.mnemosyne.<key>`, hardcoded to that subtree.
+* `cognee_integration_hermes/provider.py` advertises `service_url`, `api_key`,
+  `llm_api_key`, `llm_model`, `dataset`, `auto_route`, `improve_on_end`, and —
+  in the fork — `search_type`, `session_writes`, `write_metadata` and
+  `created_by`. The upstream docs list 17
+  `COGNEE_*` variables in total. None of them filters content, and nothing in
+  the package does.
+
+Three unfiltered write lanes, all in `provider.py`, all gated only on
+*usable / not-a-subagent / breaker-closed*:
+
+| lane | writes |
+|---|---|
+| `sync_turn` | every completed turn, verbatim |
+| `on_delegation` | `Delegated task: …\nResult: …`, routed through `sync_turn` |
+| `on_memory_write` | mirrors explicit memory-tool writes |
+
+Session writes are not a sandbox — `improve()` promotes them into the
+permanent graph at session end. This is what put 31 agent worker prompts and
+cron preambles into the imported corpus (`cognee-corpus-shape.md` §6), and it
+is live, not a Mnemosyne-era artifact.
+
+Checked against `main` as well as the installed 1.2.2: the unreleased 1.3.0
+moves the pin to cognee 1.6.0 and stops *reading* session scopes, but its
+changelog is explicit that "sessions are still written and still promoted into
+the graph by `improve()`". Writing is untouched.
+
+**Partly addressed 2026-09-27.** Two of the three lanes now have a switch:
+`session_writes: false` in the profile's cognee.json stops `sync_turn`, and
+`on_delegation` routes through it, so it is covered too. That is a blunt
+instrument, not the content filter this section is about — it turns the lane
+off rather than deciding per write. `on_memory_write` is deliberately left
+alone, since mirroring an explicit memory-tool write is the intent.
+
+There is still **no write-time content filter, and no upstream issue for one.**
+The switch lives in the fork (`aaka3207/cognee-integrations`, see the pin note
+in this section); a real filter would be a further patch to
+`cognee_integration_hermes`, or a feature request at
+`github.com/topoteretes/cognee-integrations` (`integrations/hermes-agent/`,
+Apache-2.0). Mnemosyne also ships a `write_classifier` in
+`mnemosyne/core/filters.py` — the LLM-grade version of the same idea, also
+provider-scoped, also unavailable here.
+
+### Completion recalls stalled for up to a minute
+
+**Symptom.** A `GRAPH_COMPLETION` or `HYBRID_COMPLETION` recall from Hermes
+took 25-65s while `CHUNKS` took 0.4s. Health checks kept answering, and the
+backend log showed nothing during the wait. The same request with a fresh
+session id returned in 2s.
+
+**Cause.** `CACHING` and `AUTO_FEEDBACK` both default to true. With both on,
+every completion recall that carries a session id first runs a turn-analysis
+LLM call (`feedback_detection.analyze_turn_for_session_context`), and that call
+has no timeout. The same flags save every session-less completion answer to
+`default_session_<dataset_id>` and feed it back into later contexts as
+"Previous conversation". That is where the stale history in the injected block
+came from (design doc §17).
+
+**Fix.** `CACHING=false` on `cognee-backend`, applied 2026-09-30. It is in the
+repo compose with its reason (§10 has the verification). If a completion recall
+is slow again, first check `docker exec <backend> env | grep -E
+'CACHING|AUTO_FEEDBACK'`. A probe with a fresh session id versus a real one tells
+this stall apart from a slow LLM.
 
 ---
 
@@ -853,9 +983,290 @@ mv /opt/data/cognee.json /opt/data/cognee.json.disabled
 memories land in Cognee and not in Mnemosyne, so a rollback after a month
 loses a month. That is the reason §11 needs a date, not just a verdict.
 
+### Bulk retraction (deleting records without a re-seed)
+
+Per-record deletion, safe while Hermes is in use: no restart, no wipe, and the
+graph is never empty. Run 2026-09-26 for 662 records in 28 minutes with zero
+failures. Cognee's reference-counted retraction removes each document's unowned
+graph artifacts and prunes orphaned `EdgeType` nodes; shared entities survive.
+
+Four steps, and the first two are mandatory:
+
+```bash
+B=cognee-backend-lndyf8z46p75oh524khm5z19
+M=cognee-mcp-lndyf8z46p75oh524khm5z19
+
+# 1. Back up every record's raw text first. raw_data_location is a file:// URI.
+docker cp scripts/cognee/backup_corpus.py $B:/tmp/ && docker exec $B python /tmp/backup_corpus.py
+docker cp $B:/tmp/corpus_backup.json ~/cognee-corpus-backup-$(date +%Y%m%d).json
+
+# 2. Score candidates. Uses the same classification as corpus_shape.py.
+docker cp scripts/cognee/score_drops.py $B:/tmp/ && docker exec $B python /tmp/score_drops.py
+
+# 3. Trial one record, then verify the count moved.
+TOK=$(docker exec $M printenv API_TOKEN)
+docker exec -e COGNEE_API_KEY="$TOK" -e COGNEE_URL=http://localhost:8000 $B \
+    python /tmp/forget_drops.py --commit --limit 1
+
+# 4. The rest, detached (~2.8s per record).
+docker exec -d -e COGNEE_API_KEY="$TOK" -e COGNEE_URL=http://localhost:8000 $B \
+    sh -c 'python /tmp/forget_drops.py --commit > /tmp/forget_run.log 2>&1'
+docker exec $B tail -2 /tmp/forget_run.log        # progress
+```
+
+**Aim it with the profile's `cognee.json`, not `COGNEE_BASE_URL`** -- see §5.
+`forget_drops.py` is dry-run by default and refuses to run unauthenticated.
+
+**A sweep, not a fix.** 14 transcripts reappeared during the 28-minute run,
+written by `improve()`'s `persist_session_qa` stage. Deleting them again
+without disabling that stage just repeats the sweep
+(`cognee-consolidation-design.md` §2.1).
+
+### Wiping the store and starting clean
+
+Decided 2026-09-26: the corpus is not worth triaging further and will not be
+re-seeded. Rationale in `cognee-memory-design.md` §5 — by this point it holds
+transcript fragments, conversational turns, and its own recall output (§4.7
+there), which makes it useless as a baseline for evaluating retrieval.
+
+**Order matters. Step 1 before step 3, or the store refills.** `improve_on_end`
+is what runs `improve()` at session end, and `persist_session_qa` — a stage
+that cannot be disabled individually without crash-looping the backend — writes
+a fresh transcript every time. Wipe first and the next session end starts
+rebuilding the population that was just deleted.
+
+```bash
+B=cognee-backend-lndyf8z46p75oh524khm5z19
+H=<hermes container>          # docker ps --format '{{.Names}}' | grep ^hermes
+
+# 1. Stop the refill. Personal profile only -- dinefile has its own config.
+docker exec -u hermes $H python3 -c \
+  "import json,pathlib;p=pathlib.Path('/opt/data/cognee.json');c=json.loads(p.read_text());c['improve_on_end']=False;p.write_text(json.dumps(c,indent=1)+chr(10))"
+docker exec -u hermes $H python3 -c \
+  "import json;print(json.load(open('/opt/data/cognee.json'))['improve_on_end'])"   # -> False
+
+# 2. Back up both populations. The second file is new: session Q&A rows live
+#    only in SessionQAVector_text and the document backup never saw them.
+docker cp scripts/cognee/backup_corpus.py $B:/tmp/ && docker exec $B python /tmp/backup_corpus.py
+docker cp $B:/tmp/corpus_backup.json      ~/cognee-corpus-backup-$(date +%Y%m%d).json
+docker cp $B:/tmp/session_qa_backup.json  ~/cognee-sessionqa-backup-$(date +%Y%m%d).json
+
+# 3. Wipe the dataset. memory_only=false also drops the raw files on disk;
+#    the JSON backup from step 2 is the only recovery path after this.
+TOK=$(docker exec cognee-mcp-lndyf8z46p75oh524khm5z19 printenv API_TOKEN)
+docker exec $B curl -sS -X POST http://localhost:8000/api/v1/forget \
+  -H "Content-Type: application/json" -H "X-Api-Key: $TOK" \
+  -d '{"dataset":"shared","everything":false,"memory_only":false}'
+```
+
+**`/api/v1/forget` does not clear `SessionQAVector_text`.** Confirmed on the
+2026-09-26 run: the endpoint is dataset-scoped, that table is session-keyed,
+and **247 rows survived** a wipe that removed everything else. Clearing it is a
+required step, not a contingency — skip it and completion-mode recall stays
+poisoned by the exact population the wipe was meant to remove
+(`cognee-memory-design.md` §4.4). Same for `session_records` and the orphaned
+provenance tables:
+
+```bash
+P=cognee-postgres-lndyf8z46p75oh524khm5z19
+docker exec $P psql -U cognee -d cognee_db -tAc \
+  "copy (select row_to_json(t) from session_records t) to stdout;" \
+  > ~/cognee-session-records-backup-$(date +%Y%m%d).json
+docker exec $P psql -U cognee -d cognee_db -c \
+  'truncate table "SessionQAVector_text", session_records, provenance_entries, provenance_edge_evidence, session_model_usage;'
+```
+
+Then verify:
+
+```bash
+P=cognee-postgres-lndyf8z46p75oh524khm5z19
+docker exec $P psql -U cognee -d cognee_db -tAc \
+  "select d.name, count(dt.id) from datasets d left join data dt on dt.dataset_id=d.id group by d.name;"
+docker exec $P psql -U cognee -d cognee_db -tAc \
+  'select count(*) from "SessionQAVector_text";'    # if non-zero, truncate it
+```
+
+**What is lost.** Everything, deliberately — including the 517 records the
+triage in `cognee-corpus-shape.md` had marked as keeps, and the five records
+Claude Desktop had written. The JSON backups make a re-ingest possible at
+roughly 1.3 hours for ~520 records, but no re-seed is planned.
+
+### Retiring the container-wide `COGNEE_*` variables
+
+Four variables are set container-wide in Coolify. Measured 2026-09-26, **three
+of them are dead and the fourth is misfiled**:
+
+| var | value | who actually needs it |
+|---|---|---|
+| `COGNEE_BASE_URL` | the cloud tenant | nobody -- both profiles set `service_url` in JSON |
+| `COGNEE_DATASET` | `hermes` | nobody -- a dataset neither profile uses |
+| `COGNEE_PLUGIN_DATASET` | `dinefile` | nobody -- both profiles set `dataset` in JSON |
+| `COGNEE_API_KEY` | dinefile's Cognee Cloud key | **dinefile**, whose JSON has no `api_key` |
+
+The fourth is the interesting one. It is not a shared credential that dinefile
+happens to use -- it is *dinefile's private key in a container-wide slot*, so
+the personal gateway carries it too. Together with `COGNEE_BASE_URL` pointing
+at the same tenant, the personal profile's environment holds a working URL and
+a working key for dinefile's cloud corpus. That pair is the whole explanation
+of the §5 near-miss: the 25 deletes authenticated successfully and were stopped
+only by a `datasetId` that did not exist there.
+
+⚠️ **The wizard has already been run here, against the warning in §5.**
+`/opt/data/.env` -- the *personal* profile's secrets file -- contains
+`COGNEE_BASE_URL=<cloud tenant>` and an emptied `COGNEE_SERVICE_URL`, dated
+2026-09-24. That is exactly the pair `post_setup` writes
+(`provider.py:266-271`). It has been harmless only because `cognee.json`
+outranks it. So the env pointing at cloud is in **two** places, not one.
+
+Also: `cognee.json` is mode **644** and the personal profile's holds a live API
+key, while every other secret in the system is in a 600 file.
+
+#### The order, and why
+
+The risky step goes first so it can be verified on its own, and the
+irreversible-looking step (deleting from Coolify) goes last, after a check that
+proves nothing depends on it.
+
+```bash
+H=$(docker ps --format '{{.Names}}' | grep '^hermes-tgg')
+
+# 0. Back up all four files. Edit as hermes (UID 10000), never root -- a
+#    root-owned config silently stops being read (README, "Editing config.yaml
+#    safely").
+docker exec -u hermes $H sh -c 'd=/opt/data/config-backup-$(date +%Y%m%d); mkdir -p $d &&     cp /opt/data/cognee.json /opt/data/.env $d/ &&     cp /opt/data/profiles/dinefile/cognee.json $d/dinefile-cognee.json &&     cp /opt/data/profiles/dinefile/.env $d/dinefile.env && ls -la $d'
+
+# 1. Move dinefile's key into dinefile's own config. The value is read from
+#    the environment and never printed.
+docker cp scripts/cognee/relocate_api_key.py $H:/tmp/
+docker exec -u hermes $H python3 /tmp/relocate_api_key.py \
+    /opt/data/profiles/dinefile/cognee.json                 # dry run
+docker exec -u hermes $H python3 /tmp/relocate_api_key.py \
+    /opt/data/profiles/dinefile/cognee.json --commit
+
+# 2. Tighten the personal profile's config, which also holds a key.
+docker exec -u hermes $H chmod 600 /opt/data/cognee.json
+
+# 3. THE GATE. Resolve both profiles with every COGNEE_* var stripped.
+#    Non-zero exit means something still depends on the environment -- stop.
+docker cp scripts/cognee/verify_config_resolution.py $H:/tmp/
+docker exec -u hermes $H python3 /tmp/verify_config_resolution.py
+
+# 4. Drop the two stale lines from both profiles' .env files.
+docker exec -u hermes $H sh -c \
+    'sed -i "/^COGNEE_BASE_URL=/d;/^COGNEE_SERVICE_URL=/d" /opt/data/.env \
+        /opt/data/profiles/dinefile/.env && grep -ci cognee /opt/data/.env'
+```
+
+**5. Delete all four variables in Coolify**, then redeploy.
+
+**6. Re-run step 3 and a recall on each profile.**
+
+#### The one unavoidable cost
+
+Removing container-wide variables restarts the container, which restarts
+**both** gateways. Every other procedure in this document restarts
+`gateway-default` alone and leaves dinefile running; this one cannot. Pick a
+moment when an interrupted dinefile session is acceptable. It is the only step
+here that touches dinefile at all.
+
+#### Rollback
+
+The backup from step 0 restores every file. The key itself is not at risk of
+being lost by deleting it from Coolify -- step 1 has already written it into
+dinefile's `cognee.json`, which *is* the surviving copy. Confirm step 1
+succeeded before step 5, or the credential is gone.
+
+#### What this buys
+
+`cognee.json` becomes the single source of truth per profile, keys included, at
+mode 600. No environment variable points at any cognee backend, so a script
+reading `os.environ` gets **nothing** instead of getting dinefile -- the near
+miss stops being reachable rather than staying one UUID collision away.
+
+**Unproven, and why it does not matter here.** Whether a per-profile `.env` is
+loaded into that profile's gateway process could not be measured --
+`/proc/<pid>/environ` is denied even to root in this container. The evidence
+says yes (`GITHUB_TOKEN` differs between the two files, which is pointless
+otherwise), but it is inference. This procedure therefore routes the key
+through `cognee.json`, where the mechanism is directly proven by the personal
+profile already doing it, and only *deletes* from `.env`.
+
+---
+
 ---
 
 ## 10. Current live state
+
+### Session caching turned off, 2026-09-30
+
+`CACHING=false` added to `cognee-backend` in Coolify's inline compose (it is not
+a service env var; checked 2026-10-01) and the backend restarted at 16:22Z. The
+live container env shows `CACHING=false`, with `AUTO_FEEDBACK` unset (caching
+off makes it moot). Cause and reasoning are in §7 and design doc §17.
+
+- **The repo compose now carries the line too**
+  (`deploy/cognee-selfhost.compose.yaml`). Before this change it did not, so a
+  paste of the old repo compose into Coolify would have silently turned caching
+  back on. Keep the two in step.
+- Verified with direct recalls against `shared`:
+
+  | probe | time | result |
+  |---|---|---|
+  | `context_only` on the session holding the bad Q&A | 1.2-1.4s | no "Previous conversation" |
+  | `HYBRID_COMPLETION` with `only_context` | 0.5s | no history |
+  | plain `GRAPH_COMPLETION`, no session | 4.0s | answer not saved |
+
+  `cache_qa_entries` stayed at 67 rows and `cache_session_context` at 172 across
+  every probe. The rows already there are inert and expire by 2026-10-07.
+- **Rollback:** remove the variable and restart the backend. Session history,
+  answer saving and the turn-analysis stall all come back.
+
+### `context_only` recall deployed, 2026-09-30
+
+Hermes redeployed with the plugin pinned at fork `1e01471` (fork PR #4,
+hermes #41). `cognee_recall` gained a `context_only` argument. It runs
+`GRAPH_COMPLETION` (or another completion type the caller names) with
+`only_context=True`, so it returns the graph context verbatim instead of an LLM
+answer.
+
+- Verified through the provider inside the live container: the tool schema
+  carries the argument, 9.2k-12k characters of context come back, and no Q&A
+  is saved.
+- The first live call took 65s. That was the stall in §7, fixed by the entry
+  above.
+- `SOUL.md` guidance (prefer `context_only` over plain `GRAPH_COMPLETION` for
+  broad questions) was handed over; not confirmed applied.
+- Rollback: repin the Dockerfile to `32bb76b` and redeploy. Nothing else reads
+  the argument.
+
+### Write metadata turned on, 2026-09-29
+
+Hermes redeployed with the plugin pinned at fork `32bb76b` (hermes #40), then
+`"write_metadata": true` added to the personal `/opt/data/cognee.json` (backup
+beside it, `cognee.json.bak-20260929`) and the container restarted. `dinefile`
+is untouched.
+
+- The loaded config reads back `write_metadata: true`, `created_by: hermes`,
+  `search_type: CHUNKS`.
+- The first real write after it, at 16:20:59Z, carries the metadata in the
+  `data` row: `created_at`, `created_by: hermes`,
+  `write_origin: cognee_remember`, `hermes_session_id`. Earlier rows carry
+  only cognee's own `_cognee.source_uri`. Checked with
+  `select created_at, name, external_metadata from data order by created_at desc limit 3`
+  in `cognee_db`. The chunk copy lives in the per-dataset database and was
+  not checked directly.
+- `SOUL.md` (`/opt/data`, not in this repo) gained two edits, each backed up
+  beside it:
+  - `.bak-20260929`: a Notion pointer write passes the page id as
+    `metadata.notion_page_id`, and a reader prefers that over an id in the
+    text.
+  - `.bak-search-20260929`: a new "How the shared store searches" section. It
+    says `CHUNKS` for anything acted on, `CHUNKS_LEXICAL` for exact terms, and
+    `GRAPH_COMPLETION` only for broad questions and only as a lead.
+- Claude Desktop writes carry no metadata: `cognee-mcp`'s `remember` has no
+  metadata parameter.
+- Rollback: remove the key and restart. The plugin sends exactly what it sent
+  before.
 
 ### Upgraded to 1.6.1, 2026-09-29
 
@@ -959,3 +1370,9 @@ Mnemosyne.
 An evaluation with no recorded verdict becomes the status quo by default, and
 every day it runs unrecorded, the Mnemosyne store goes staler and the
 rollback in §9 costs more. Set a date to come back to this.
+
+**Graph question added 2026-09-30, due about 2026-10-14.** A separate call from
+the Mnemosyne one: is cognee's graph worth its cost per write? Compare `CHUNKS`
+with `context_only` recall on real questions (design doc §17). Record here
+whether the graph found anything `CHUNKS` missed. If it never did, the graph is
+paying for nothing, and §0 of the design doc argues for a cheaper backend.

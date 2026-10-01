@@ -11,7 +11,9 @@ provisional.
 
 ## 1. The problem this is trying to solve
 
-Cognee accretes. It does not consolidate, and nothing in it will.
+Cognee accretes. Nothing in it consolidates, and nothing in it will
+*automatically* -- but see §4: retraction at record granularity is supported
+and correct, so the graph is repairable even though it never repairs itself.
 
 `docs/cognee-graph-analysis.md` has the numbers; the mechanism is:
 
@@ -61,6 +63,109 @@ exist as relationship names -- but those are LLM-extracted from record *text*,
 not system-generated. The extractor reaches for supersession vocabulary on its
 own.
 
+## 2.1 Correction (2026-09-26): cognee already ships the sleep cycle
+
+**Most of §5 describes a Hermes cron job that cognee 1.6.0 already implements
+as a stage of `improve()`.** This was found by reading the running source; it
+was not in the docs we had read. The rest of this document is still useful for
+the *crawl* (§6) and the failure modes (§7), but the core "read sessions,
+distill facts, write them back" loop should not be built from scratch.
+
+`improve()` runs nine stages, in order:
+
+```
+feedback_weights, persist_session_qa, persist_agent_traces,
+extract_agent_context, distill_sessions, update_user_preferences,
+build_truth_subspace, triplet_enrichment, global_context_index
+```
+
+`cognee/modules/session_distillation/distill.py` describes its own flow:
+
+> 1. LOAD    session QA turns + distillable session-context entries.
+> 2. CURATE  pack the session timeline into batches; one curator LLM call per batch.
+> 3. ACCEPT  per proposed lesson: search prior lessons/entities, then writer/rejecter LLM.
+> 4. PERSIST render accepted lessons as documents; add + cognify them in one pass.
+
+That is the design in §5, with two properties we had not specified: an
+**accept/reject pass against prior lessons** (so a new lesson is checked
+against what the graph already believes), and a **watermark**
+(`session_persist_watermark`) that makes it resumable. Its failure semantics
+are better than what we sketched:
+
+> A failed curator batch or writer call drops only its own work mid-run, but
+> the run then finishes by RAISING (after publishing what survived) instead of
+> advancing the watermark: sealing entries behind calls that never ran would
+> mark them distilled forever -- one LLM outage on a finished session would
+> silently lose its lessons.
+
+### It runs, and it produces nothing
+
+Measured 2026-09-26, on every `improve()` call that afternoon:
+
+```
+improve: session Q&A persisted from 1 session(s)
+improve: distilled session 'hermes_...' -> status=no_gated_entries documents=0
+```
+
+And in Postgres, `node_set` across all 802 records:
+
+| node_set | records |
+|---|---:|
+| `["mnemosyne"]` | 778 |
+| `["user_sessions_from_cache"]` | 16 |
+| `null` | 8 |
+| `["session_learnings"]` | **0** |
+
+So the two session-fed stages have opposite outcomes. `persist_session_qa`
+works -- it writes the raw `Session ID: ... Question: ... Answer:` documents,
+which is where the transcript population comes from and why it regenerates
+after deletion. `distill_sessions` returns `no_gated_entries` and zero
+documents, every time. **The noisy half works and the useful half is inert.**
+
+`no_gated_entries` means it found no *session context entries* clearing
+`MIN_GATE_CONFIDENCE`. It reads those via `get_session_manager()`, not the
+persisted Q&A documents -- confirmed in `distill.py:156-171` -- so the two
+stages are independent, and disabling the dumper does not starve the distiller.
+Why nothing clears the gate is the open question; `extract_agent_context` runs
+immediately before `distill_sessions` in the registry and is the likely
+producer of those entries.
+
+### What follows
+
+* **The transcript leak has a name, but NOT a switch.** It is
+  `persist_session_qa`, and `IMPROVE_STAGES_DISABLED` **cannot turn it off.**
+  An earlier revision of this section claimed it could; that was wrong, and it
+  was wrong in a way that took the backend down. Tried 2026-09-26:
+
+  ```
+  ValueError: IMPROVE_STAGES_DISABLED cannot disable fatal stage(s)
+  ['persist_session_qa']: skipping them would silently lose session data
+  ```
+
+  `registry.py:89` `validate_stages_disabled()` rejects a set of *fatal*
+  stages at import time, and `persist_session_qa` is one. The failure is
+  total, not degraded: `get_improve_config()` raises during app startup,
+  gunicorn's worker exits code 3, and the container crash-loops. Ours restarted
+  15 times before the variable was removed.
+
+  The lesson generalises: **`IMPROVE_STAGES_DISABLED` is validated at startup,
+  so a bad value is a boot failure, not a warning.** Check a stage against the
+  fatal list before setting it, and expect an outage if you do not.
+
+  Ways that remain, none of them a one-liner: `improve_on_end: false` in the
+  profile's `cognee.json` (Hermes-side, but all-or-nothing — it also disables
+  `distill_sessions`, the stage worth keeping), periodic retraction of the
+  `Session ID: hermes_` population (`cognee-operations.md` §9, a sweep not a
+  fix), or an upstream change.
+* **Do not build the consolidation cron yet.** Diagnose the gate first. A
+  working `distill_sessions` makes most of §5 redundant.
+* **Session entries are not time-expired.** No TTL, expiry, retention or
+  max-age logic exists anywhere in `session_lifecycle/` or
+  `session_distillation/`; invalidation is event-driven (e.g. on document
+  delete). So a nightly job cannot arrive to find an empty cache, and a job
+  that fails for days can catch up. This was the blocking unknown for the cron
+  design and it resolves in the design's favour.
+
 ## 3. What cognee does not give us
 
 **Semantic origin.** There is no field anywhere that says a fact came from
@@ -94,7 +199,82 @@ the second. It has not been investigated.
 
 Validity is the one that consolidation actually needs, and nothing models it.
 
-## 4. The idea
+## 4. Correction is record-granular, and the graph is a projection
+
+This was the sketch's lead open question. It is answered, and the answer
+inverts one of the premises above.
+
+**Cognee implements reference-counted graph retraction.** From
+`infrastructure/databases/unified/provenance_delete_planner.py`:
+
+> the planner decides which artifacts become *unowned* (no owning source ref
+> remains -> hard delete) versus which merely *survive* (some ref remains ->
+> detach the targeted refs only)
+
+So `forget(data_id=..., dataset_id=...)` does not nuke or orphan anything. It
+detaches that record's source refs from every node and edge it touched;
+anything losing its **last** ref is hard-deleted along with its vectors;
+anything still referenced survives with only the targeted refs removed.
+Orphaned `EdgeType` nodes and NodeSet tags are pruned on the same pass, and
+each of the three steps is individually idempotent and retry-safe.
+
+Concretely: forgetting one record does not disturb `ameer` (35 refs). It does
+cleanly remove the entities only that record mentioned.
+
+### The correction primitive
+
+No graph-mutation API is needed, and none is used:
+
+```
+forget(data_id)   surgical retraction of that record's contribution
+remember(text)    re-derivation from the corrected text
+```
+
+**The record store is the truth; the graph is a projection over it.** And the
+projection is rebuildable: `forget(dataset=..., memory_only=True)` drops graph
+and vectors while *keeping the raw files*. Measured: 1,447 raw records,
+155 MB, retained on disk today.
+
+Three consequences:
+
+* **The extraction prompt is not only for future writes.** The existing graph
+  can be rebuilt under `scripts/cognee/extraction_prompt.txt` without
+  re-seeding from Mnemosyne -- the records are already stored.
+* **Consolidation has a conservative form.** The agent edits *records*; the
+  graph follows. It never touches nodes.
+* **"Cannot tell" is cheap.** Leaving a conflict alone costs nothing, because
+  nothing structural was mutated to begin with.
+
+Calibration: a full rebuild is ~1,433 records at ~9s ≈ **3.5 hours** of backend
+time plus LLM spend. Expensive, not prohibitive; the shape of an overnight job
+rather than something a human waits on.
+
+### The new fault line: granularity
+
+Correction is **record-granular**. Contradictions are **assertion-granular**.
+That mismatch is now the interesting problem rather than the mutation API.
+
+A record holding five facts, one of them wrong, can only be fixed by rewriting
+all five. Re-extraction is non-deterministic, so the other four come back
+*slightly different* -- a different predicate choice, possibly a different
+entity split. Which means **repair is not idempotent**: running the
+consolidator twice over the same conflict can leave two different graphs, and
+convergence cannot be demonstrated.
+
+The implication worth sitting with: **records should be small.** One assertion
+per record makes correction surgical and makes non-determinism harmless,
+because there is nothing else in the record to disturb. The Mnemosyne corpus is
+already close to that shape by accident.
+
+It also suggests the consolidator's real output may be **record surgery** --
+split a compound record into atomic ones, then correct the single bad one --
+rather than "pick a winner between two assertions."
+
+## 5. The idea
+
+> **Superseded in part -- see §2.1.** cognee 1.6.0's
+> `distill_sessions` stage already implements this loop. Read that first;
+> what remains live here is the crawl (§6) and the failure modes (§7).
 
 **Cognee is the substrate. Hermes is the curator.**
 
@@ -129,6 +309,36 @@ cardinality problem disappears.
 worth doing for graph quality -- it is just no longer a precondition for
 consolidation.)
 
+### What access it needs: HTTP only
+
+Everything the job needs is already on cognee's HTTP API, with the API key
+Hermes holds. **No direct Kuzu access, no reaching into the container, no new
+infrastructure.**
+
+| need | surface |
+|---|---|
+| enumerate `contradicts` edges, read `source_refs` | `POST /api/v1/search`, `searchType: CYPHER` |
+| whole-graph read | `GET /api/v1/datasets/{dataset_id}/graph` |
+| the original record text behind a source ref | `GET /api/v1/datasets/{id}/data/{data_id}/raw` |
+| retract / re-derive | `forget`, `remember` |
+
+Cypher is the load-bearing one, and it is available here: the capability is
+declared per adapter as `GraphDBInterface.supports_cypher_queries`, which
+defaults to `True`; only the turso and postgres_demo adapters opt out. This
+deployment runs Kuzu (Ladybug-backed), which inherits the default.
+`SearchType.CYPHER` executes the query as given rather than generating it --
+`SearchType.NATURAL_LANGUAGE` is the generating variant -- so the conflict
+queue is a deterministic query, not an LLM guess.
+
+One consequence for where the code lives: the Hermes *memory provider* surface
+is `remember` / `recall` / `forget`, so it does not expose graph reads. The job
+would talk to cognee's API directly rather than through the provider
+abstraction. That is the right split anyway -- the provider is the agent's
+memory, this is an administrative task against the store.
+
+It also means the job is a pure client. It could run anywhere, and it does not
+couple Hermes to cognee's storage layout.
+
 ### What it adds that cognee structurally cannot have
 
 **External corroboration.** Cognee only knows what was written into it, so its
@@ -140,7 +350,7 @@ advantage over anything the vendor could ship.
 Mnemosyne's `sleep` tool was reaching for the same idea. Converging on a design
 twice from different directions is usually a good sign.
 
-## 5. The crawl
+## 6. The crawl
 
 From a `contradicts` pair, the inputs are:
 
@@ -197,7 +407,7 @@ A crawl over a personal memory store will otherwise summarize your entire life
 per contradiction. Natural terminators: found something dispositive; exhausted
 the cheap sources; hit depth N.
 
-## 6. Failure modes to design against
+## 7. Failure modes to design against
 
 **It will always resolve.** An agent asked to settle contradictions produces
 settlements, confidently, including when both sides are bare assertions with no
@@ -213,6 +423,19 @@ month's established fact, with the original evidence trail already collapsed.
 This argues for consolidation being **additive and reversible** -- mark a
 loser, do not delete it; keep the pre-consolidation state recoverable.
 
+Note that §4 makes retraction *clean* but not *reversible*: once a record is
+forgotten and re-added, the prior extraction is gone and cannot be diffed
+against. If the pre-correction state is to be recoverable, the original record
+text has to be archived outside cognee before the forget, because cognee keeps
+no version history.
+
+**Repair does not converge.** Re-extraction is non-deterministic and correction
+is record-granular (§4), so a second pass over the same conflict can produce a
+different graph than the first. Any consolidator needs a **termination
+condition that does not depend on reaching a fixed point** -- a conflict marked
+resolved stays resolved, rather than being re-derived and re-judged on the next
+run.
+
 **Decisions must carry their evidence.** Stored with the outcome, not used and
 discarded -- otherwise the next run redoes the search and may land differently.
 The payload is *this won, because of this message on this date*, which is also
@@ -223,14 +446,27 @@ what makes a bad consolidation reviewable rather than archaeological.
 consolidator changes nothing that an agent consuming the answer can see. This
 may be the more urgent gap than consolidation itself.
 
-## 7. Open questions
+## 8. Open questions
 
-**What does "make a correction" physically do?** The crux, and currently
-unknown. Writing a corrected record just *adds* a third assertion to a two-way
-conflict and grows the graph. Real correction needs either `forget` on the
-source document -- unverified whether that removes derived nodes or orphans
-them -- or direct graph mutation, which is outside the supported API. The whole
-idea rests on this.
+**Why does `distill_sessions` report `no_gated_entries`?** It is the
+highest-value open question in this document: the sleep cycle exists and is
+wired in, and nothing clears `MIN_GATE_CONFIDENCE` to feed it.
+`extract_agent_context` runs immediately before it and is the likely
+producer of session-context entries. Unresolved.
+
+~~**What does "make a correction" physically do?**~~ **Answered in §4** --
+reference-counted retraction via `forget`, then re-add. No graph mutation
+needed, and shared entities are not collaterally damaged.
+
+**Is a full rebuild worth doing, and does it converge?** §4 establishes it is
+possible (~3.5h, raw records retained). Unmeasured: whether rebuilding under
+the new extraction prompt actually improves the whole-corpus numbers the way it
+improved the 24-record sample, and how much the result differs run to run.
+
+**Should records be split before anything else?** If one assertion per record
+is the right granularity (§4), that is a corpus-wide transformation that wants
+doing *before* consolidation rather than after -- and it is not obvious whether
+it is better done at re-seed time or as its own pass.
 
 **Does the backlog get a queue?** 40 contradicts edges cover recent writes
 only. Whether a backfill pass over ~1,432 imported records is feasible, and
@@ -243,8 +479,11 @@ what it costs, is unmeasured.
 consolidation are one design -- each is weak without the others -- but the
 dependency order has not been worked out.
 
-## 8. Related
+## 9. Related
 
+* `docs/cognee-memory-design.md` -- what the memory system is *for*, the
+  cognee/Notion division of labour, and the 2026-09-26 retrieval measurements
+  that make most of the consolidation sketch below secondary to fixing recall
 * `docs/cognee-graph-analysis.md` -- measured state of the graph
 * `claudedocs/research_cognee_graph_fragmentation_20260925.md` -- why cognee
   builds it that way, with source citations
