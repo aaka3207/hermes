@@ -113,7 +113,7 @@ of them sits in the **LLM extraction layer**, and none sits in storage:
 | cognee | cognify builds an unusable graph; completions corrupt names and dates |
 | Honcho | the deriver writes its own prompt's examples into facts about the user |
 | OpenViking | extraction drops, merges and deletes records (2026-09-26; overstated for plain `write`s, see `openviking-analysis.md` §4) |
-| Mnemosyne | the consolidation cycle produced nothing, then froze |
+| Mnemosyne | consolidation ran (388 runs, 2026-07-28 to 2026-09-20, LLM summaries) and stopped when writes stopped; structured fact extraction produced almost nothing (`memoria_facts` 0, `triples` 1 on 2026-09-14) |
 
 The inverse also holds. Each one's plain read path works: cognee's `CHUNKS`,
 Honcho's verbatim row search with a literal-substring branch for identifiers,
