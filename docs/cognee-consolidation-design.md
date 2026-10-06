@@ -485,6 +485,9 @@ dependency order has not been worked out.
   cognee/Notion division of labour, and the 2026-09-26 retrieval measurements
   that make most of the consolidation sketch below secondary to fixing recall
 * `docs/cognee-graph-analysis.md` -- measured state of the graph
+* `docs/openviking-analysis.md` -- whether OpenViking could be the tier-3 store;
+  its `forget(uri)` and `ov compile --skill memory` are the nearest equivalents
+  of the consolidation job sketched here
 * `claudedocs/research_cognee_graph_fragmentation_20260925.md` -- why cognee
   builds it that way, with source citations
 * `scripts/cognee/extraction_prompt.txt` -- candidate extraction prompt

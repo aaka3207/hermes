@@ -92,7 +92,9 @@ Steps 1 and 2 below are **done** -- see §15, which supersedes them.
   still pays the LLM extraction that builds it, and the injected block is its
   main reader. Candidates researched 2026-09-26 in
   `claudedocs/research_honcho_20260926.md` and
-  `claudedocs/research_openviking_20260926.md`. **Cheapest experiment first:**
+  `claudedocs/research_openviking_20260926.md`; OpenViking was re-checked
+  against v0.4.23 on 2026-10-04 in `openviking-analysis.md` (backups fixed,
+  extraction risk overstated, still untested). **Cheapest experiment first:**
   `LCM_ASSERTIONS_ENABLED` and `LCM_EMBEDDINGS_ENABLED` are two environment
   variables on a plugin already installed and already serving every session
   (§10).
@@ -110,7 +112,7 @@ of them sits in the **LLM extraction layer**, and none sits in storage:
 |---|---|
 | cognee | cognify builds an unusable graph; completions corrupt names and dates |
 | Honcho | the deriver writes its own prompt's examples into facts about the user |
-| OpenViking | extraction drops, merges and deletes records |
+| OpenViking | extraction drops, merges and deletes records (2026-09-26; overstated for plain `write`s, see `openviking-analysis.md` §4) |
 | Mnemosyne | the consolidation cycle produced nothing, then froze |
 
 The inverse also holds. Each one's plain read path works: cognee's `CHUNKS`,
@@ -125,10 +127,12 @@ store-index-return-exactly is reliable everywhere and is nobody's headline.
 **Two consequences for this design.** First, provider choice matters less than
 it appears -- if the answer at every provider is *disable the LLM layer and use
 it as a store*, they are near-interchangeable, and the real criterion becomes
-whose failures are loud. OpenViking fails that test badly (config flags
+whose failures are loud. OpenViking failed that test on 2026-09-26 (config flags
 declared and never read; `ov snapshot commit` broken since 0.4.19 with nightly
-backups failing unnoticed). LCM passes it by being already installed, already
-holding everything, and visibly in the request path.
+backups failing unnoticed). `ov snapshot` was fixed by 2026-09-29, and the
+`recallExcludeUris` flag is wired in v0.4.23, so re-check
+`openviking-analysis.md` §2 before relying on this line. LCM passes it by being
+already installed, already holding everything, and visibly in the request path.
 
 Second, the convention in this document -- deliberate writes, dated assertions,
 explicit pointers, verbatim reads, a cron that consolidates -- is doing by hand
