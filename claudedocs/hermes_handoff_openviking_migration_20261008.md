@@ -22,8 +22,10 @@ record of what was handed over and what came of it.
   one explained deviation.
 - The omissions log (`source/hub/omissions.md` in the original pilot) is stale: it lists 24 hub children as "none fetched",
   but 23 were later imported into `hub-children/` and the 24th (Livefront Bounds Rulebook) is marked imported separately in
-  `source/hub/`. Its "no fetch reported truncation" line is wrong (LlamaIndex Post-Sales SA Decision Framework was imported
-  truncated). It also omits the two deleted-in-error entries. The log is not edited, because its sha256 is in the manifest.
+  `source/hub/`. It also omits the two deleted-in-error entries. (An earlier version of this note also called its "no fetch
+  reported truncation" line wrong, saying the LlamaIndex Post-Sales SA Decision Framework was imported truncated. Corrected
+  2026-10-08: the user confirmed the Notion page itself ends mid-sentence at "Reduc…", so that is source incompleteness, not
+  import or export loss.) The log is not edited, because its sha256 is in the manifest.
   Decision: no errata file; the corrections live in Hermes's P4 report and the cognee record.
 - P4 was recorded in `/opt/data/projects/unified-personal-os/.hermes/reports/openviking-knowledge-architecture-2026-10-07.md`.
 - The consolidated record was saved to the self-hosted cognee `shared` dataset at 2026-10-08 18:03 UTC
