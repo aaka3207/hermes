@@ -9,6 +9,10 @@ v0.4.23 (`df32bf6e5`), plus GitHub issues. Each claim says which: **VERIFIED**
 (read in code or docs), **INFERRED**, or **UNKNOWN**. The test list in §9 is
 what turns the inferred and unknown ones into measured ones.
 
+Updated 2026-10-07: §13 adds the architecture, assets, compilation and
+workflows pages read that day, and the idea of replacing the Notion hubs
+outright. The trial that follows from it is `docs/openviking-hub-trial.md`.
+
 Context: the architecture in `cognee-memory-design.md` §0 specifies tier 3 as a
 "shared store (cognee today)", so it was never tied to cognee. This document
 asks whether OpenViking could be that store.
@@ -257,12 +261,17 @@ possible here:
   afterwards; whether Claude's later `edit` keeps them is untested.
 * **Author:** the filename, the body, a trailer key, or a peer path. Desktop
   cannot set a peer.
-* **Account templates** (`PUT /api/v1/admin/accounts/{id}/memory-templates/{type}`,
-  Studio: Users and Permissions, Extraction Rules; PR #5495): edit `description`,
-  field `description` and `content_template` only, for profile, preferences,
-  entities, events, soul and identity. **No field can be added** (the API
-  raises "Unknown template field"). Root or admin only. Applies to future
-  extraction. No live extraction run was done in the PR.
+* **Account templates** (`GET|PUT|DELETE /api/v1/admin/accounts/{id}/memory-templates/{type}`;
+  documented in `docs.openviking.ai/en/api/08-admin`, routes in `admin.py` at
+  v0.4.23, read by extraction in `compressor_v3.py`): edit type `description`,
+  field `description` and, for events, soul and identity, `content_template`
+  only, for profile, preferences, entities, events, soul and identity. **No
+  field or type can be added** (the API raises "Unknown template field").
+  Root or admin only, account-wide (not per user or session). Applies to
+  future extraction, snapshotted at extraction start, no restart. PR #5495 was
+  the Studio UI for this, closed unmerged 2026-09-30; the API exists
+  regardless. Corrected 2026-10-08: an earlier version of this note implied the
+  feature was unmerged. No live extraction run has been done.
 * **Deployment templates:** `memory.custom_templates_dir` in `ov.conf` takes
   `*.yaml` files that add custom memory types with custom fields
   (`notion_page_id`, `written_by`, `written_on`), `filename_template`,
@@ -270,7 +279,17 @@ possible here:
   per-type custom prompt;** the global extraction instruction is hard-coded
   (`SessionExtractContextProvider.instruction()`). Per-type `description` text is
   the nearest control. This is weaker than the `custom_prompt` injection we
-  trialled on cognee.
+  trialled on cognee. A schema with the same `memory_type` replaces the
+  built-in; a new name adds a type (`guides/10-prompt-guide`). Descriptions
+  are free text up to 50,000 characters, injected into the output-schema field
+  description, so compliance is up to the model (#5599: a description
+  instruction produced 0 operations on one model).
+* **Peers and the profile (2026-10-08 research):** the actor-peer header does
+  not route extraction; write scope is `memory_policy` plus each message's
+  `peer_id` plus the LLM's per-operation `peer_id`. An omitted `peer_id` writes
+  to the user root (#5613). A peer is a tag, not a wall, so a shared user does
+  not keep Hermes-operational memory out of `profile.md`. Full analysis and
+  ranked options in `claudedocs/research_openviking_peers_hermes_plugin_20261008.md`.
 
 ## 9. Open questions and tests
 
@@ -292,7 +311,11 @@ test says otherwise.
 5. **Forged trailer:** a file with `memory_type: "entities"` plus a
    contradicting session. Prediction: it becomes editable or deletable.
 6. **`extraction_output_format: json`** on an untyped file.
-7. **`ov compile --skill memory`** against untyped files.
+7. **`ov compile --skill memory`** against untyped files. Raised in priority on
+   2026-10-07: the compilation page describes this mode as deduplicating and
+   merging existing memory directories in-process, without an LLM (§13). That
+   contradicts the "probably not mutated" inference in §4, so test it under both
+   `memories/` and `resources/`.
 8. **Resource-deletion cascade:** a record linking `viking://resources/x`,
    delete `resources/x`, diff the record.
 9. **`add_resource --reason`** with per-user policy disabled, then with
@@ -393,9 +416,115 @@ Desktop reads over `find`/`read`, and `session_skill_extraction_enabled` stays
 off. A cheaper alternative for Desktop is serving the Hermes skills directory as
 plain files. Revisit after #4655 and #5337 land.
 
+## 13. Docs pages read on 2026-10-07, and the Notion-hub idea
+
+Added after a read of the public docs pages below. **Caveat on method:** each
+page was fetched through a summarising model, not read raw. Treat these as
+VERIFIED against the page summary only, and re-read the raw text before relying
+on a detail. Nothing was run.
+
+### 13.1 Architecture (`concepts/01-architecture`, `05-storage`, `11-multi-tenant`)
+
+```
+Client (CLI / SDK / HTTP / MCP)
+  -> services: FS, Search, Session, Resource, Pack (backup), Debug
+  -> storage: RAGFS/AGFS (files, source of truth) + vector index (rebuildable)
+
+viking://
+  resources/   shared, account-wide, ACL-restrictable
+  ~/memories/  per user (and per peer)
+  ~/skills/    per user; shared skills are account-wide
+each directory: .abstract.md (L0), .overview.md (L1), files (L2)
+```
+
+* **Ingest:** `Input -> Parser -> TreeBuilder -> ResourceProcessor -> RAGFS ->
+  SemanticQueue -> Vector index`. Bytes are stored first; the L0/L1 sidecars
+  come from an asynchronous LLM queue, so search lags a write.
+* **Retrieve:** `Query -> intent analysis (LLM, 0 to 5 typed queries) -> vector
+  search per query -> optional rerank`. `read`, `grep` and `glob` bypass it.
+* **Session commit:** `Messages -> archive boundary -> memory extraction`, with
+  LLM dedupe and merge, stored as patches. This is the path to keep off.
+* **LLM touch points:** intent analysis, memory extraction, L0/L1 generation,
+  optional rerank. None sits on the `read` path.
+* **Correction to the 2026-09-26 report:** the vector index stores the L0
+  abstract text (capped at 50,000 bytes per record), not only URIs and vectors.
+  Files remain the source of truth and the index can be rebuilt from them.
+* **Separate knowledge bases:** accounts are the isolation boundary, with no
+  data crossing them. Within an account, split by directory under `resources/`
+  and use ACLs. Memories and user resources are private per user.
+
+### 13.2 Assets (`guides/18-openviking-assets`)
+
+A declarative manifest (`openviking-assets/1`) that syncs **git repositories**
+into `viking://` resources, with a catalog, local state and credential aliases
+kept in `~/.openviking/openviking_assets_credentials.yaml`. Limits: git only,
+sequential, local state with no cross-machine sync, no orphan cleanup, flat
+manifests. Not relevant to hubs; relevant to code projects.
+
+### 13.3 Context compilation (`context-compilation/01-overview`)
+
+`ov compile --from X --to Y --skill S [--instruction ...]` reads sources and
+**writes new output files**, leaving sources untouched. Manual only, run
+asynchronously by the Agent Runtime (VikingBot locally); LLM-driven for normal
+skills. Task recovery lasts 24 hours for completed tasks and 7 days for failed.
+
+**New conflict:** the page says `--skill memory` consolidates existing memory
+directories **in-process, without an LLM**, only deduplicating and merging. §4
+inferred that plain files "probably get no binding and are not mutated". If the
+merge works on directory content, it could merge or delete hand-written files.
+UNKNOWN until test 7 in §9. Keep curated hubs out of `memories/` and do not run
+this mode over them in the meantime.
+
+### 13.4 Workflows (`workflows/01-overview`)
+
+An index page: import and retrieval, cross-session memory, skills, output
+generation, sync. One useful warning: a passing health check or an empty search
+does not prove ingestion failed. Check background task state before concluding
+anything is lost.
+
+### 13.5 The L0/L1/L2 layers map onto the hub structure
+
+| OpenViking | Role | Notion equivalent |
+|---|---|---|
+| L0 `.abstract.md` | one-line summary per node | hub index entry or pointer title |
+| L1 `.overview.md` | scan layer | the hub page |
+| L2 | actual content | the linked pages |
+
+The sidecars are LLM-made at ingest and sit beside the verbatim bytes. They are
+navigation aids, not the record. For `events` and `resources`, a default hit can
+return the abstract, so an id or date that lives only in the body can be missing.
+
+### 13.6 Replacing the Notion hubs outright
+
+Proposed 2026-10-07: drop the prose hubs and the pointer, distillation and
+consolidation layers around them, and let the store hold the text.
+
+* **Fits:** `read(uri)` returns a whole file, `edit` changes it in place, and
+  `forget(uri)` retracts it. Those are the three things cognee lacks for a hub
+  (whole-document read, in-place edit, simple retract).
+* **Does not fit:** Notion databases (tasks, relations, views). They stay.
+* **Placement:** under `viking://resources/hubs/`, not `memories/` (§7 notes
+  `memories/` writes get memory handling).
+* **Losses:** a phone-editable UI (Studio on mobile is untested) and an
+  independent record, if OpenViking becomes the only copy. Hence the nightly
+  plain-file export in the trial plan.
+* **Write path with the Hermes plugin vs MCP:** see §6. The bundled plugin
+  captures every turn and has no off switch; MCP only does not. `remember` is
+  an extraction call and cannot be hidden from Claude Desktop (§7, §10).
+* **Cheaper variant:** keep the hubs as markdown files in git and use the store
+  only as a search index. Same win on pointers and distillation, with diff and
+  rollback for free.
+
+The one-hub trial is `docs/openviking-hub-trial.md`.
+
 ## Sources
 
 * `claudedocs/research_openviking_20260926.md`, `claudedocs/research_honcho_20260926.md`
+* `docs/openviking-hub-trial.md`
+* Public docs, read 2026-10-07 through a summarising fetch:
+  `docs.openviking.ai/en/workflows/01-overview`, `guides/18-openviking-assets`,
+  `context-compilation/01-overview`, `concepts/01-architecture`,
+  `concepts/05-storage`, `concepts/11-multi-tenant`
 * OpenViking tag v0.4.23 (`df32bf6e5`): `docs/en/guides/06-mcp-integration.md`,
   `docs/en/concepts/11-multi-tenant.md`, `docs/en/api/12-content.md`,
   `docs/en/api/16-memory.md`, `docs/design/session-memory-extraction-flow.md`,
