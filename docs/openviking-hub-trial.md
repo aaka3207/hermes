@@ -1,5 +1,7 @@
 # OpenViking one-hub trial: replacing a Notion hub
 
+> **Scope update — 2026-10-08:** This document is a narrower, still-unrun experiment about storing a prose hub in OpenViking; it is not the overall project decision framework. The user's main interest is OpenViking as an agent-context layer. Notion may remain for pages Hermes creates for reading scripts or making checklists. Do not expand this trial into proving parity for all Notion databases, views, or human-facing workflows. Career Strategy is the selected hub for the broader pilot; representative workflows can be tested later. The isolated copy remains disposable and Notion remains authoritative during evaluation. The user's single-user setup makes multi-user permission parity non-gating; retain basic privacy safeguards.
+
 **Status: a plan, not run.** Nothing here has been executed. Claims carry the
 labels used in `openviking-analysis.md`: **VERIFIED** (read in code or docs),
 **INFERRED**, **UNKNOWN**. This plan turns the UNKNOWN and INFERRED ones into
