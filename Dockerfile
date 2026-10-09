@@ -1,10 +1,16 @@
 FROM nousresearch/hermes-agent:latest
 
 USER root
+# The base image stopped putting uv on PATH (it now lives under
+# /opt/hermes/tools/uv-<version>-linux-x64/), so ship our own. Likewise npm's
+# global prefix is now PM's node dir, whose bin/ is not on PATH: the loop below
+# links the global CLIs into /usr/local/bin.
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /usr/local/bin/uv
 RUN apt-get update && \
     apt-get install -y --no-install-recommends syncthing && \
     rm -rf /var/lib/apt/lists/* && \
     npm install -g @anthropic-ai/claude-code byterover-cli ntn @upstash/cli vercel @posthog/cli supabase && npm cache clean --force && \
+    for b in "$(npm prefix -g)"/bin/*; do [ -e "/usr/local/bin/${b##*/}" ] || ln -s "$b" "/usr/local/bin/${b##*/}"; done && \
     uv pip install --python /opt/hermes/.venv/bin/python --no-cache hindsight-client==0.6.1 faster-whisper==1.2.1
 
 # Mnemosyne — local-first SQLite memory provider (alternative to hindsight).
