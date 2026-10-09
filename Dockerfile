@@ -1,16 +1,24 @@
-FROM nousresearch/hermes-agent:latest
+# Pinned by digest, not :latest. This is the image `:latest`/`:stable` pointed at
+# on 2026-10-08 (also tagged rc.4-v0.21.6; the plain v0.21.6 tag is a different,
+# earlier build). Upstream's PM rework shipped there and broke several things we
+# had to work around (see docs/hermes-pm-base-image-update-2026-10-09.md); bump
+# this deliberately, after a test build, not by letting :latest move under us.
+FROM nousresearch/hermes-agent@sha256:9774f4f39a9bb8c2f68ce728ed5e99ddbad282163be56764afacf88ed952b784
 
 USER root
 # The base image stopped putting uv on PATH (it now lives under
 # /opt/hermes/tools/uv-<version>-linux-x64/), so ship our own. Likewise npm's
-# global prefix is now PM's node dir, whose bin/ is not on PATH: the loop below
-# links the global CLIs into /usr/local/bin.
+# default global prefix is now PM's hash-verified node dir (installing there
+# trips `hermes pm doctor`, and its bin/ is not on PATH), so the global CLIs
+# below go to /usr/local instead. npm 12 also runs no install scripts by default
+# (allow-scripts is empty), which leaves claude-code's stub claude.exe unreplaced
+# ("native binary not installed"), so its postinstall is run explicitly.
 COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /usr/local/bin/uv
 RUN apt-get update && \
     apt-get install -y --no-install-recommends syncthing && \
     rm -rf /var/lib/apt/lists/* && \
-    npm install -g @anthropic-ai/claude-code byterover-cli ntn @upstash/cli vercel @posthog/cli supabase && npm cache clean --force && \
-    for b in "$(npm prefix -g)"/bin/*; do [ -e "/usr/local/bin/${b##*/}" ] || ln -s "$b" "/usr/local/bin/${b##*/}"; done && \
+    npm install -g --prefix /usr/local @anthropic-ai/claude-code byterover-cli ntn @upstash/cli vercel @posthog/cli supabase && npm cache clean --force && \
+    node /usr/local/lib/node_modules/@anthropic-ai/claude-code/install.cjs && \
     uv pip install --python /opt/hermes/.venv/bin/python --no-cache hindsight-client==0.6.1 faster-whisper==1.2.1
 
 # Mnemosyne — local-first SQLite memory provider (alternative to hindsight).
