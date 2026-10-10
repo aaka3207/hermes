@@ -313,8 +313,10 @@ backup of the main database, `quick_check` ok). `installs/` was skipped; PM rege
    rc (rc.3 to rc.5 were published on Oct 8 and 9), test-build it as above, then change the digest.
    Which tag the Oct 1 build used is still unconfirmed.
 6. **Unchecked after the move to PM:** `hermes-webui` (my notes say it regenerates `/app` from
-   `/apptoo`), the first boot behaviour of `/opt/data/installs`, and OpenViking recall through
-   Hermes's prefetch (the write path was seen to commit; see Verification). Also seen in the test
+   `/apptoo`), the first boot behaviour of `/opt/data/installs`, and ~~OpenViking recall through
+   Hermes's prefetch~~ (verified 2026-10-09 evening: Hermes quoted back an injected
+   `viking://user/owner/memories/events/2026/10/09/write_map_agreed.md` and the server entity record,
+   so write and read-back both work; this is Hermes's own report of its context). Also seen in the test
    turn: `Auxiliary title generation failed: OpenAI Responses request is missing input` and
    `Unknown toolsets: homeassistant`, neither investigated.
 7. **Benign warnings seen:** `Failed to load bundled provider plugin solstice: No module named 'httpx'`
