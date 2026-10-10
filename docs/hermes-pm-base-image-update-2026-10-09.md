@@ -17,7 +17,13 @@ statement is marked as an inference.
 - Follow-up the same day (second commit): the base is now **pinned by digest**, npm globals install
   to `/usr/local` (which cleared the `hermes pm doctor` node digest mismatch, confirmed), and
   `claude` got an explicit postinstall because npm 12 runs no install scripts by default.
-- Open: a malformed `lcm.db` for the `dinefile` profile (pre-existing), and a MetaMCP 524 seen once.
+- After the redeploy, MCP sign-in failed with "streamable_http is not available". Cause: the plugin
+  install built a PM generation without the image's baked extras (upstream #135329 / `fe2b130b`).
+  Fixed with `hermes pm install --extra ...`. A second error, `invalid_redirect_uri`, came from a
+  missing `dashboard.public_url` behind the TLS proxy; fixed by setting it. Akiflow now works. See
+  "Post-deploy: MCP sign-in failure".
+- Open: a malformed `lcm.db` for the
+  `dinefile` profile (pre-existing), and a MetaMCP 524 seen once.
 
 ## Timeline
 
@@ -176,9 +182,114 @@ Plugin 'openviking' was not published: venv: uv lock exited 2: error: Failed to 
   path accepted the turn. It was not searchable in OpenViking afterwards, which is plausible for a
   trivial turn but not proven. Recall through Hermes's prefetch was **not** verified separately;
   the OpenViking server's own search and health were fine.
-- Upstream's build path after the pinned image: `Dockerfile` has no commits since Sept 28 beyond
-  the one already included; `docker/` and `scripts/bundles/` changes since are a separate sandbox
-  image, desktop packaging and lint. Nothing that affects this image was found.
+- Upstream's build path after the pinned image, as checked at about 16:30 UTC: `Dockerfile` had
+  no commits since Sept 28 beyond the one already included; `docker/` and `scripts/bundles/`
+  changes since were a separate sandbox image, desktop packaging and lint. **This became stale
+  the same day**: upstream commit `fe2b130b` (authored 17:12 UTC, committed 17:35 UTC) changed the
+  Dockerfile. See "Post-deploy: MCP sign-in failure" below.
+
+## Post-deploy: MCP sign-in failure (resolved in two steps, see "Resolution")
+
+After the redeploy of `f62dd1080` (16:49 to 16:55 UTC), the user could not sign in to MCP servers
+in Hermes:
+
+```
+Could not sign in to the MCP server: MCP server 'akiflow' requires HTTP transport but
+mcp.client.streamable_http is not available. Upgrade the mcp package to get HTTP support.
+```
+
+**Cause (hypothesis, then confirmed by the `pm status` receipt below):** upstream bug #135329, fixed in upstream commit `fe2b130b`
+("fix(pm): record the Docker image's baked extras and restore them on boot", committed
+2026-10-09 17:35 UTC, after our pinned image). Its message: the image bakes eight extras into
+`/opt/hermes/.venv` but never recorded them as PM's dependency selection, so the first generation a
+container builds (a lazy extra, or **a plugin's dependencies**) starts from an empty selection and
+"dropped aiohttp, the messaging SDKs and mcp. After the next restart the API server, platform
+adapters and MCP servers failed to start." The upstream Dockerfile now builds the venv with
+`--record-selection`, and stage2 restores missing baked extras on boot. Our pinned image
+(Oct 8) has neither.
+
+**Probable trigger: our own action.** `hermes plugins install openviking --yes-deps --enable`
+(about 11:30 local) built a new generation under `/opt/data/installs` with the plugin's three
+dependencies (`httpx`, `psutil`, `packaging`). The 16:49 redeploy restarted the containers, which
+booted from that generation. Supporting detail: at 11:23, before the plugin install, the log still
+showed an MCP client request (`httpx2: GET https://metamcp.aakashe.org/metamcp/hermes/mcp`, which
+returned 524), so the MCP SDK imported then.
+
+At the time of writing the server was unreachable (the user was on another network; the SSH
+profile uses the LAN address), so this was first diagnosed from upstream and confirmed later.
+
+**Related upstream issues checked:**
+- [#123770](https://github.com/NousResearch/hermes-agent/issues/123770): the `mcp` extra is dropped
+  when PM migrates a legacy venv, with the same error. Workaround stated there:
+  `hermes pm install --extra mcp`. Same bug class, different trigger.
+- [#122395](https://github.com/NousResearch/hermes-agent/issues/122395): a process activating a
+  dependency generation built for another interpreter ABI fails the same way. Reported for source
+  installs with an in-tree venv, so it probably does not apply here.
+- [#134107](https://github.com/NousResearch/hermes-agent/issues/134107): the `solstice ... No module
+  named 'httpx'` warning is emitted by PM's deliberately minimal worker runtime, **not** by the main
+  or dashboard process. It does not imply the dashboard lacks `httpx`; an earlier suggestion in this
+  session that the two were linked was wrong.
+- A separate, older case in the maintainer's notes: a single process can cache a failed `import mcp`
+  for its lifetime (`tools/mcp_tool.py::_ensure_mcp_sdk`), fixed by restarting that process.
+
+**Plan (executed, see Resolution):**
+1. Read-only: `hermes pm status`, the recorded selection in `facts.json`, and
+   `grep -i -E "mcp|parked|streamable" /opt/data/logs/agent.log | tail -60`.
+2. If the selection lacks the image's extras, restore them with an explicit sync
+   (`hermes pm install --extra ...` for the image's baked extras: `all`, `messaging`, `otlp`,
+   `anthropic`, `bedrock`; check the exact flag shape with `hermes pm install --help` first), or
+   deselect the generation so the image's own venv boots. Then restart the dashboard and gateway and
+   check `hermes memory status`, the MCP page and Discord.
+3. When a published image contains `fe2b130b` (the Docker Hub rc and `main` tags seen so far predate
+   it), bump the pinned digest after a test build; its stage2 refresh restores the baseline
+   automatically.
+
+**Lesson:** on this image, installing a plugin with `--yes-deps` may drop the baked extras on the
+next restart until the upstream fix is in the image.
+
+### Resolution
+
+**Step 1, the import error.** `hermes pm status` showed the latest sync receipt with
+`feature_list: audio-io, discord, wake-openwakeword` (sync 18:21 UTC): the baked extras were not in the
+recorded selection, which confirmed the #135329 mechanism. The user ran
+
+```
+hermes pm install --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock
+```
+
+The sync succeeded at 19:38 UTC, the receipt's feature_list then included `all`, `anthropic`,
+`bedrock`, `messaging`, `otlp`, and an `mcp http` import check passed. The "streamable_http is not
+available" error went away. Discord had kept answering throughout.
+
+**Step 2, `invalid_redirect_uri`.** The next sign-in attempt failed one layer up, at OAuth dynamic
+client registration:
+
+```
+Registration failed: 400 {"error":"invalid_redirect_uri", ... "Redirect URI is not allowed:
+http://hermes-dashboard.aakashe.org/api/mcp/oauth/callback/akiflow"}
+```
+
+Only the OAuth MCP servers failed; header/bearer-key servers (MetaMCP and so on) never build a
+redirect URI. Upstream builds it in `hermes_cli/web_routers/mcp.py::_mcp_oauth_callback_url`: it uses
+`HERMES_DASHBOARD_PUBLIC_URL` (env) or `dashboard.public_url` (config.yaml) verbatim when set, and
+otherwise reconstructs the URL from `request.base_url`. Neither was set, and behind Traefik (TLS
+terminated) the dashboard sees plain http, hence the `http://` URI that Akiflow rejected.
+
+Fix, both applied:
+- `dashboard.public_url: https://hermes-dashboard.aakashe.org` in `/opt/data/config.yaml` (set by
+  Hermes; verified on the server at line 102). Upstream re-reads config per request, so no restart
+  was needed for it.
+- `HERMES_DASHBOARD_PUBLIC_URL=https://hermes-dashboard.aakashe.org` added as a runtime-only env var
+  on the Coolify app (uuid `x5m8razwsrpsaiasapudfabm`). It takes effect on the next redeploy and
+  takes precedence over the config key; both hold the same value.
+
+**Verified:** the user signed in to Akiflow from the dashboard, restarted the gateway, and Hermes
+reported it could retrieve 11 calendars and 6 inbox tasks. Other OAuth servers were not individually
+re-tested in this session.
+
+The `public_url` setting is a first-time requirement, not a regression from the image update: nothing
+in the repo or the Coolify env set it before. Whether the dashboard OAuth flow worked earlier by some
+other route was not checked.
 
 ## Safety copy taken before the follow-up
 
