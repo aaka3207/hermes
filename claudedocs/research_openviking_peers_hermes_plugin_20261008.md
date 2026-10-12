@@ -130,3 +130,9 @@ Include a control run with a real user fact in the same session. Confirm the edi
 Prompt customization is a defence in depth, not a boundary. A custom `hermes_ops` type plus tightened descriptions on the same
 user could work if you accept probabilistic separation and verify it with the 20-run test. For a guarantee, use a separate
 `hermes` user. The `memory.extraction_enabled` switch is now on, and `identity.md`/`soul.md` templates are also account-editable.
+
+## Follow-up, 2026-10-10
+
+Tested against the live server in `docs/openviking-peer-contamination-2026-10-10.md`. Confirmed: the plugin tags only assistant messages, `viking_remember`
+sends a bare user message, and owner turns land at the user root. Not confirmed: whether extraction routes to a peer, because a user policy with
+`peer.enabled: false` was in force during the tests. Corrections: plugin is now the catalog v2.1.1 (not the bundled v2.0.0), and sessions also commit on a live token threshold.

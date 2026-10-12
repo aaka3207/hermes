@@ -538,3 +538,5 @@ The one-hub trial is `docs/openviking-hub-trial.md`.
   #5249, #4047
 * Related: `cognee-memory-design.md` §0, §10, §16; `cognee-graph-analysis.md`;
   `cognee-consolidation-design.md` §9
+* Peer and contamination findings: `openviking-peer-contamination-2026-10-10.md`;
+  earlier peer analysis: `../claudedocs/research_openviking_peers_hermes_plugin_20261008.md`
