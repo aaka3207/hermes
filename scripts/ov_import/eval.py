@@ -22,7 +22,12 @@ corpus, which is reported separately (a tree built earlier can predate the evide
 An arm URI ending in "+filters" runs the filtered recipe: when the query names a date
 or month, find with tags entry_date=... then month=..., then plain find restricted to
 level 2; results merged in that order, de-duplicated. An arm URI ending in "+files" runs
-plain find restricted to level 2 (files only, no directory summaries).
+plain find restricted to level 2 (files only, no directory summaries). "+search" runs
+`search` (reranked when the server has a reranker) with score_threshold -1. "+agent" runs
+a fixed multi-step recipe standing in for an agent, scored by the order files are read:
+round-robin over (a) search, expanding each directory hit with a files-only find scoped
+to it, (b) grep for the names and figures in the query, files ranked by how many terms
+they match, (c) find with the query's entry_date / month tags.
 """
 import argparse
 import json
@@ -84,7 +89,71 @@ def cache_tree(ov, base, cache, refresh):
     return files
 
 
+QWORDS = set("""What Which Who Whom Where When Why How Did Does Do Is Was Were Are In On For During
+According After Before The A An My I I'm And Or Of To From With At By As Any Anything""".split())
+TERM_RE = re.compile(r"(?:[A-Z][\w&'.\-]*)(?:\s+(?:[A-Z][\w&'.\-]*|&))*(?:\s+\d[\d\u2013\-]*)?|\$\d[\d,.]*[KkMm]?")
+
+
+def query_terms(query):
+    """Names and figures an agent would grep for: capitalized runs and dollar amounts,
+    minus question words and month names (dates go through tags)."""
+    out = []
+    for m in TERM_RE.findall(query):
+        words = [w for w in re.sub(r"'s\b|[?,.:;]+$", "", m).split()]
+        while words and (words[0] in QWORDS or words[0] in MONTHS):
+            words.pop(0)
+        term = " ".join(words).strip(" .,'")
+        if len(term) >= 3 and term not in MONTHS:
+            out.append(term)
+    return list(dict.fromkeys(out))
+
+
+def search(ov, base, query, limit, **extra):
+    body = {"query": query, "target_uri": base, "limit": limit, "score_threshold": -1, **extra}
+    return ov._req("POST", "/api/v1/search/search", body=body).get("resources", [])
+
+
+def agent_recipe(ov, base, query, limit=20):
+    def safe(fn):
+        try:
+            return fn()
+        except OVError:
+            return []
+    a = []
+    for hit in safe(lambda: search(ov, base, query, 10)):
+        if hit.get("level") == 2:
+            a.append(hit)
+        else:
+            d = hit["uri"].rsplit("/", 1)[0] if hit["uri"].rsplit("/", 1)[-1].startswith(".") else hit["uri"]
+            a += safe(lambda: ov.find(query, target_uri=d, limit=3, level=2).get("resources", []))
+    counts, order = {}, []
+    for term in query_terms(query):
+        res = safe(lambda: ov.grep(base, re.escape(term), case_insensitive=True, node_limit=300))
+        for u in dict.fromkeys(m["uri"] for m in (res.get("matches", []) if isinstance(res, dict) else [])):
+            if u not in counts:
+                order.append(u)
+            counts[u] = counts.get(u, 0) + 1
+    b = [{"uri": u, "level": 2} for u in sorted(order, key=lambda u: (-counts[u], order.index(u)))]
+    c = []
+    for tag in date_filters(query):
+        c += safe(lambda: ov.find(query, target_uri=base, limit=10, tags=[tag], level=2).get("resources", []))
+    out, seen, streams = [], set(), [a, b, c]
+    while any(streams) and len(out) < limit:
+        for st in streams:
+            while st:
+                h = st.pop(0)
+                if h["uri"] not in seen:
+                    seen.add(h["uri"])
+                    out.append(h)
+                    break
+    return out[:limit]
+
+
 def retrieve(ov, base, query, filtered, limit=20):
+    if filtered == "agent":
+        return agent_recipe(ov, base, query, limit)
+    if filtered == "search":
+        return search(ov, base, query, limit)
     if filtered == "files":
         return ov.find(query, target_uri=base, limit=limit, level=2).get("resources", [])
     if not filtered:
@@ -169,8 +238,9 @@ def main(argv=None):
     report = {"arms": {}, "sets": {k: [c["case_id"] for c in v] for k, v in sets.items()}}
     for spec in args.arm:
         name, uri = spec.split("=", 1)
-        filtered = "files" if uri.endswith("+files") else uri.endswith("+filters")
-        base = uri.removesuffix("+filters").removesuffix("+files").rstrip("/")
+        mode = uri.rsplit("+", 1)[1] if "+" in uri else ""
+        filtered = mode if mode in ("files", "search", "agent") else mode == "filters"
+        base = uri.split("+", 1)[0].rstrip("/")
         files = cache_tree(ov, base, args.cache, args.refresh_cache)
         idx = index_arm(files, base)
         arm = {"base": base, "filtered": filtered, "files": len(files), "runs": []}
