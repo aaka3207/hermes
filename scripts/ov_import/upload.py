@@ -2,10 +2,10 @@
 """Upload a build.py tree to OpenViking, one folder import per group, then per-file tags.
 
     python3 scripts/ov_import/upload.py --config ~/.local/share/ov-import/career/config.yaml \
-        [--group source/changelog/2026-04 ...] [--target viking://...] [--instruction-file f] [--dry-run]
+        [--group changelog/2026-04 ...] [--target viking://...] [--instruction-file f] [--dry-run]
 
-Groups are source/hub, source/hub-children, source/notes, source/contacts,
-source/applications and one per source/changelog/<YYYY-MM>. Each group is imported with
+Groups are the top-level folders of the tree (hub, hub-children, notes, contacts,
+applications) and one per changelog/<YYYY-MM>. Each group is imported with
 `ov add-resource <dir> --to <target>/<group> --args parse_mode:no_split --tags <shared>`
 (tags every file in the group shares), then remaining per-file tags are appended with
 set_tags. `reason` is never sent: a non-empty reason triggers memory extraction.
@@ -31,13 +31,13 @@ from ovclient import OV, OVError  # noqa: E402
 
 def groups_of(tree):
     out = []
-    for d in sorted((tree / "source").iterdir()):
+    for d in sorted(tree.iterdir()):
         if not d.is_dir():
             continue
         if d.name == "changelog":
-            out += [f"source/changelog/{m.name}" for m in sorted(d.iterdir()) if m.is_dir()]
+            out += [f"changelog/{m.name}" for m in sorted(d.iterdir()) if m.is_dir()]
         else:
-            out.append(f"source/{d.name}")
+            out.append(d.name)
     return out
 
 

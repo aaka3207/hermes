@@ -103,13 +103,13 @@ def main(argv=None):
     tree = build / "tree"
     target = (args.target or cfg["target_uri"]).rstrip("/")
     current = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m")
-    months = args.month or [m.name for m in sorted((tree / "source/changelog").iterdir()) if m.is_dir() and m.name < current]
+    months = args.month or [m.name for m in sorted((tree / "changelog").iterdir()) if m.is_dir() and m.name < current]
     store = build / "stamps"
     store.mkdir(exist_ok=True)
     ov = OV(timeout=300)
 
     for month in months:
-        mdir = tree / "source/changelog" / month
+        mdir = tree / "changelog" / month
         for d in [mdir, *sorted(s for s in mdir.iterdir() if s.is_dir())]:
             rel = str(d.relative_to(tree))
             uri = f"{target}/{rel}"

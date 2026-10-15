@@ -5,7 +5,7 @@
 
 Reads <config dir>/snapshots/latest (or --snapshot) and the per-row changelog
 split plans in <config dir>/changelog_splits/. Writes <config dir>/builds/<snapshot>/:
-    tree/source/...   one Markdown file per retrieval unit
+    tree/...          one Markdown file per retrieval unit
     tags.json         {relative path: ["k=v", ...]}  per-file retrieval tags
     manifest.json     path, sha256, chars, notion id, last_edited, tags
     report.txt        counts, warnings, dropped content
@@ -353,10 +353,10 @@ def write_page(tree, rec, folder, source_type, label, cfg_split, extra_front=Non
 # ---------------------------------------------------------------- adapters
 
 def adapt_hub(tree, rec, cfg):
-    write_page(tree, rec, "source/hub", "hub", "Career hub", cfg["split"])
+    write_page(tree, rec, "hub", "hub", "Career hub", cfg["split"])
 
 
-def adapt_child(tree, rec, cfg, folder="source/hub-children", source_type="hub_child", label="Hub page"):
+def adapt_child(tree, rec, cfg, folder="hub-children", source_type="hub_child", label="Hub page"):
     return write_page(tree, rec, folder, source_type, label, cfg["split"])
 
 
@@ -372,7 +372,7 @@ def adapt_note(tree, rec, cfg, index_rows=None):
         v = props.get(key)
         if isinstance(v, str):
             tags.append(f"{key.lower()}={slugify(v, 40)}")
-    base = write_page(tree, rec, "source/notes", "note", "Note", cfg["split"], extra, tags)
+    base = write_page(tree, rec, "notes", "note", "Note", cfg["split"], extra, tags)
     if index_rows is not None:
         index_rows.append((rec["title"], props.get("Type") or "", props.get("Status") or "",
                            base.split("/")[-1], rec["page"]["last_edited_time"][:10]))
@@ -381,7 +381,7 @@ def adapt_note(tree, rec, cfg, index_rows=None):
 def write_notes_index(tree, rows):
     lines = ["| Title | Type | Status | File | Last edited |", "|---|---|---|---|---|"]
     lines += [f"| {t.replace('|', '/')} | {ty} | {st} | {f} | {le} |" for t, ty, st, f, le in sorted(rows)]
-    tree.add("source/notes/index.md", {"notion_title": "Notes & Resources index", "source_type": "note_index"},
+    tree.add("notes/index.md", {"notion_title": "Notes & Resources index", "source_type": "note_index"},
              f"Notes & Resources index ({len(rows)} notes)", "\n".join(lines), ["source_type=note_index"])
 
 
@@ -398,7 +398,7 @@ def adapt_contact(tree, rec, cfg, index_rows):
         return
     lead = is_job_lead(title, props)
     entity = "job-lead" if lead else "contact"
-    folder = "source/applications" if lead else "source/contacts"
+    folder = "applications" if lead else "contacts"
     source_type = "application" if lead else "contact"
     sections = []
     for key in ("Notes", "Next Action"):
@@ -419,8 +419,8 @@ def adapt_contact(tree, rec, cfg, index_rows):
 
 
 def write_contact_index(tree, rows):
-    for entity, folder, label in (("contact", "source/contacts", "Contacts"),
-                                  ("job-lead", "source/applications", "Job application leads")):
+    for entity, folder, label in (("contact", "contacts", "Contacts"),
+                                  ("job-lead", "applications", "Job application leads")):
         sel = sorted(r for r in rows if r[0] == entity)
         if not sel:
             continue
@@ -526,7 +526,7 @@ def adapt_changelog(tree, recs, cfg, plans):
             # Stub rows: the short page body (a disclaimer or note) rides along with the row state.
             state_body += f"\n\n## Page body\n\n{clean(raw_body)}"
         slug = plan["row"] if plan else slugify(rec["title"], MAX_STEM - 7)
-        tree.add(f"source/changelog/{month}/state-{slug}.md",
+        tree.add(f"changelog/{month}/state-{slug}.md",
                  page_front(rec, f"{rec['title']} (row state)", "changelog_state", {"month": month}),
                  f"Career changelog · {rec['title']} · row state (Summary, Open Loops, Pipeline Snapshot)",
                  state_body, ["source_type=changelog_state", f"month={month}", f"notion_id={rec['id'][:8]}"],
@@ -544,7 +544,7 @@ def adapt_changelog(tree, recs, cfg, plans):
         by_month.setdefault(item[0]["date"][:7], []).append(item)
     for month, items in sorted(by_month.items()):
         items.sort(key=lambda it: (it[0]["date"], it[3], it[0]["ordinal"]))
-        existing = sum(1 for p in tree.files if p.startswith(f"source/changelog/{month}/"))
+        existing = sum(1 for p in tree.files if p.startswith(f"changelog/{month}/"))
         weekly = existing + len(items) > max_children
         per_day = {}
         for e, text, rec, row in items:
@@ -552,7 +552,7 @@ def adapt_changelog(tree, recs, cfg, plans):
             per_day[date] = per_day.get(date, 0) + 1
             nn = per_day[date]
             title = e["title"].strip() or f"{date} (untitled entry)"
-            folder = f"source/changelog/{month}"
+            folder = f"changelog/{month}"
             if weekly:
                 y, w, _ = dt.date.fromisoformat(date).isocalendar()
                 folder += f"/{y}-W{w:02d}"
@@ -624,10 +624,10 @@ def build(cfg, snapshot, out):
         if kind == "hub":
             adapt_hub(tree, rec, cfg)
         elif kind == "child":
-            folder = page_dirs[rec["parent_id"]] if rec.get("parent_id") else "source/hub-children"
+            folder = page_dirs[rec["parent_id"]] if rec.get("parent_id") else "hub-children"
             page_dirs[rec["id"]] = adapt_child(tree, rec, cfg, folder)
         elif kind == "transcript":
-            folder = page_dirs.get(rec.get("parent_id")) or f"source/hub-children/{cfg['children']['transcripts']['folder']}"
+            folder = page_dirs.get(rec.get("parent_id")) or f"hub-children/{cfg['children']['transcripts']['folder']}"
             page_dirs[rec["id"]] = adapt_child(tree, rec, cfg, folder, "transcript", "Interview transcript")
         elif kind == "notes":
             adapt_note(tree, rec, cfg, notes_index)
@@ -672,7 +672,8 @@ def main(argv=None):
 
     by_top = {}
     for m in manifest:
-        top = "/".join(m["path"].split("/")[:2])
+        parts = m["path"].split("/")
+        top = "/".join(parts[:2] if parts[0] == "changelog" else parts[:1])
         by_top.setdefault(top, []).append(m["chars"])
     lines = [f"build {out}", f"snapshot {snapshot.name} ({index['snapshot_utc']})", f"files {len(manifest)}"]
     lines += [f"  {top:<28} {len(v):>4} files  max {max(v):>6} chars" for top, v in sorted(by_top.items())]

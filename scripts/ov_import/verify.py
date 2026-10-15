@@ -2,7 +2,7 @@
 """Verify an uploaded tree against its build: names, bytes and tags.
 
     python3 scripts/ov_import/verify.py --config ~/.local/share/ov-import/career/config.yaml \
-        [--target viking://...] [--group source/changelog/2026-04 ...]
+        [--target viking://...] [--group changelog/2026-04 ...]
 
 For each group: every build file must exist at the same relative path, with identical
 bytes, and carry at least its tags.json tags; remote files absent from the build are
