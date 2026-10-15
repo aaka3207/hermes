@@ -27,7 +27,9 @@ plain find restricted to level 2 (files only, no directory summaries). "+search"
 a fixed multi-step recipe standing in for an agent, scored by the order files are read:
 round-robin over (a) search, expanding each directory hit with a files-only find scoped
 to it, (b) grep for the names and figures in the query, files ranked by how many terms
-they match, (c) find with the query's entry_date / month tags.
+they match, (c) find with the query's entry_date / month tags. "+grep" runs grep only:
+the query's names and figures plus the frontmatter `date:` line for a named day or month,
+files ranked by how many of these patterns they match.
 """
 import argparse
 import json
@@ -149,7 +151,31 @@ def agent_recipe(ov, base, query, limit=20):
     return out[:limit]
 
 
+def grep_recipe(ov, base, query, limit=20):
+    """grep only: each name/figure in the query (case-insensitive), plus the frontmatter
+    `date:` line for a named day (or month); files ranked by how many of these they match."""
+    patterns = [re.escape(t) for t in query_terms(query)]
+    for m, d in DATE_RE.findall(query):
+        patterns.append(f"^date: '{YEAR}-{MONTHS[m]:02d}-{int(d):02d}'")
+    if not DATE_RE.search(query):
+        patterns += [f"^date: '{YEAR}-{MONTHS[m]:02d}-" for m in dict.fromkeys(MONTH_RE.findall(query))]
+    counts, order = {}, []
+    for p in patterns:
+        try:
+            res = ov.grep(base, p, case_insensitive=True, node_limit=300)
+        except OVError:
+            continue
+        for u in dict.fromkeys(m["uri"] for m in res.get("matches", [])):
+            if u not in counts:
+                order.append(u)
+            counts[u] = counts.get(u, 0) + 1
+    ranked = sorted(order, key=lambda u: (-counts[u], order.index(u)))
+    return [{"uri": u, "level": 2} for u in ranked[:limit]]
+
+
 def retrieve(ov, base, query, filtered, limit=20):
+    if filtered == "grep":
+        return grep_recipe(ov, base, query, limit)
     if filtered == "agent":
         return agent_recipe(ov, base, query, limit)
     if filtered == "search":
@@ -239,7 +265,7 @@ def main(argv=None):
     for spec in args.arm:
         name, uri = spec.split("=", 1)
         mode = uri.rsplit("+", 1)[1] if "+" in uri else ""
-        filtered = mode if mode in ("files", "search", "agent") else mode == "filters"
+        filtered = mode if mode in ("files", "search", "agent", "grep") else mode == "filters"
         base = uri.split("+", 1)[0].rstrip("/")
         files = cache_tree(ov, base, args.cache, args.refresh_cache)
         idx = index_arm(files, base)
