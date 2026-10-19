@@ -7,9 +7,6 @@ services:
     container_name: hermes
     restart: unless-stopped
     command: gateway run
-    depends_on:
-      syncthing:
-        condition: service_healthy
     ports:
       - "8642:8642"   # gateway API
       - "9119:9119"   # dashboard (only reached when HERMES_DASHBOARD=1)
@@ -44,12 +41,6 @@ services:
       - METAMCP_API_KEY=${METAMCP_API_KEY}
       # Camofox anti-detection browser companion (its own Coolify app). Set in Coolify.
       - CAMOFOX_URL=${CAMOFOX_URL}
-      # GBrain (gbrain-life) OAuth 2.1 client credentials for the
-      # "career-pilot-agent" client (source=career-pilot, federated-read=career-pilot,
-      # scopes=read write). Registered via `gbrain auth register-client` on the
-      # gbrain-life Coolify app. Set in Coolify.
-      - GBRAIN_CAREER_PILOT_CLIENT_ID=${GBRAIN_CAREER_PILOT_CLIENT_ID}
-      - GBRAIN_CAREER_PILOT_CLIENT_SECRET=${GBRAIN_CAREER_PILOT_CLIENT_SECRET}
       - DISCORD_BOT_TOKEN=${DISCORD_TOKEN}
       - HONCHO_API_KEY=${HONCHO_API_KEY}
       - GATEWAY_SECRET=${GATEWAY_SECRET}
@@ -70,59 +61,10 @@ services:
       - HERMES_SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
       - HERMES_SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
-      # Mnemosyne memory provider: pin its SQLite store to the persistent
-      # volume (/opt/data). Explicit path avoids expanduser("~/.hermes")
-      # landing in ephemeral /root/.hermes if invoked in a root context. This
-      # resolves to ~/.hermes/mnemosyne/data on the host — the SAME path the
-      # standalone mnemosyne-mcp Coolify service (separate repo) must bind-mount
-      # as its MNEMOSYNE_HOST_DATA_DIR, so both share one SQLite file.
-      - MNEMOSYNE_DATA_DIR=/opt/data/mnemosyne/data
-      # Route mnemosyne's embeddings through OpenRouter's OpenAI-compatible
-      # /embeddings endpoint instead of local fastembed ONNX inference — keeps
-      # embedding generation off this container's CPU/RAM budget (the
-      # [embeddings] extra/fastembed is deliberately not installed above).
-      # IMPORTANT: mnemosyne 3.5.0's embedding code (mnemosyne/core/embeddings.py)
-      # reads its OWN vars — MNEMOSYNE_EMBEDDING_API_KEY (falling back only to
-      # OPENAI_API_KEY, NOT OPENROUTER_API_KEY) and MNEMOSYNE_EMBEDDING_API_URL
-      # (NOT OPENROUTER_BASE_URL). Without MNEMOSYNE_EMBEDDING_API_KEY set,
-      # available() returns False and it silently drops to FTS5 keyword-only
-      # (verified: embeddings_available: NO in `hermes mnemosyne doctor`). We
-      # reuse the existing OPENROUTER_API_KEY value via ${...} interpolation.
-      # MNEMOSYNE_EMBEDDING_DIM must match the model (1536 for
-      # openai/text-embedding-3-small) and the standalone mnemosyne-mcp
-      # service's setting, since they share one vector table.
-      - MNEMOSYNE_EMBEDDINGS_VIA_API=true
-      - MNEMOSYNE_EMBEDDING_API_URL=https://openrouter.ai/api/v1
-      - MNEMOSYNE_EMBEDDING_API_KEY=${OPENROUTER_API_KEY}
-      - MNEMOSYNE_EMBEDDING_MODEL=openai/text-embedding-3-small
-      - MNEMOSYNE_EMBEDDING_DIM=1536
-      # MNEMOSYNE_EXTRACTION_PROMPT is set in Coolify (reaches the container via
-      # env_file: .env) — it steers fact extraction toward durable, portable,
-      # user-centric memories and drops ephemeral session/technical/debug detail
-      # (so the shared store is meaningful in Claude Desktop too). It ONLY takes
-      # effect because the lazy-register patch (Dockerfile) keeps the Codex host
-      # LLM attached to the extraction path; without a live LLM, extract_facts()
-      # returns [] and the prompt is never consulted. Tunable in the Coolify UI +
-      # restart (no rebuild needed).
-      # Only extract memory from the USER's turns, not the assistant's. Without
-      # this, extraction mined assistant replies + hermes's own system-prompt
-      # rules (Composio/Gmail tool procedures, "never run REMOTE_BASH", email
-      # prompt-injection defenses) into junk, non-portable facts/instructions.
-      # Restricting to user turns keeps the store user-centric and portable.
-      - MNEMOSYNE_SYNC_ROLES=user
-      # Author attribution for the shared store. The DB is shared with the
-      # standalone mnemosyne-mcp service (Claude Desktop, author_id=claude-desktop);
-      # stamping every write from this side with author_id=hermes lets recall scope
-      # by author and makes the soul.md "audit only records you authored" rule
-      # enforceable. working_memory/episodic_memory have indexed author_id/author_type
-      # columns; remember() stamps them from these env vars. Previously unset (all
-      # author_id NULL), so writes from both agents were indistinguishable.
-      - MNEMOSYNE_AUTHOR_ID=hermes
-      - MNEMOSYNE_AUTHOR_TYPE=agent
       # Cognee — graph memory for the `dinefile` profile only, in CLOUD mode.
       # These vars are container-wide (both gateways see them), but only the
       # profile whose config.yaml says `memory.provider: cognee` ever builds the
-      # provider, so the default profile is unaffected and stays on mnemosyne.
+      # provider, so the default profile (openviking) is unaffected.
       #
       # A set COGNEE_BASE_URL is what selects remote/cloud mode (config.py
       # load_config): with it, the plugin talks REST to the tenant and never
@@ -139,8 +81,7 @@ services:
       # /opt/data/profiles/dinefile/cognee.json, which load_config applies AFTER
       # the environment — no rebuild or restart of the other profile needed.
       - COGNEE_PLUGIN_DATASET=${COGNEE_PLUGIN_DATASET:-dinefile}
-      # Obsidian vault + wiki paths for the agent (synced into /opt/data/Sync via
-      # syncthing). Values are set in Coolify; referenced here so they reach the
+      # Obsidian vault + wiki paths for the agent. Values are set in Coolify; referenced here so they reach the
       # hermes *runtime* container — Coolify otherwise only passes them as unused
       # build args. Default to the on-volume Sync paths if unset in Coolify.
       - OBSIDIAN_VAULT_PATH=${OBSIDIAN_VAULT_PATH:-/opt/data/Sync/obsidian}
@@ -157,9 +98,7 @@ services:
       # (measured ~150-200s+ under load). `docker compose up` waits out the
       # start_period before counting failures, so it must exceed real boot time
       # or the deploy aborts the gateway as unhealthy while it's still starting —
-      # which then leaves dependents (hermes-webui) stuck in "Created". The
-      # concurrent mnemosyne-dashboard startup (apt+git clone) adds contention,
-      # so allow generous margin.
+      # which then leaves dependents (hermes-webui) stuck in "Created".
       start_period: 300s
     deploy:
       resources:
@@ -172,13 +111,13 @@ services:
   # Runs the stock upstream image as a THIN frontend. Browser chat turns are
   # bridged over HTTP to the patched `hermes` gateway (HERMES_WEBUI_CHAT_BACKEND
   # =gateway → http://hermes:8642/v1/chat/completions), so all LLM + memory work
-  # executes in the hermes container — where the Codex null-guard, the Mnemosyne
-  # lazy-register patch, and the Mnemosyne/hindsight providers actually live.
+  # executes in the hermes container — where the Codex null-guard and the
+  # memory providers actually live.
   #
   # This is deliberately NOT the upstream "in-process" default: that path builds
   # its own venv from plain hermes-agent[all] and would carry neither our SDK
-  # patches (every Codex call crashes on null response.output) nor the Mnemosyne
-  # provider. Bridging to the gateway sidesteps both.
+  # patches (every Codex call crashes on null response.output) nor our memory
+  # providers. Bridging to the gateway sidesteps both.
   #
   # State (sessions, settings) lands in ~/.hermes/webui on the shared volume.
   hermes-webui:
@@ -224,97 +163,3 @@ services:
         limits:
           memory: 1G
           cpus: "1.0"
-
-  syncthing:
-    image: lscr.io/linuxserver/syncthing:latest
-    container_name: hermes-syncthing
-    restart: unless-stopped
-    environment:
-      - PUID=10000
-      - PGID=10000
-      - TZ=${TZ:-America/Chicago}
-    volumes:
-      - syncthing_config:/config
-      - ~/.hermes:/data1
-    ports:
-      - "8384:8384"
-      - "22000:22000/tcp"
-      - "22000:22000/udp"
-      - "21027:21027/udp"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8384/"]
-      interval: 5s
-      timeout: 20s
-      retries: 10
-
-  # Read-only web dashboard for the mnemosyne SQLite memory store.
-  # Source:  https://github.com/wysie/mnemosyne-dashboard (pinned commit).
-  # Audit:   stdlib-only Python, parameterized SQL, opens DB with ?mode=ro
-  #          (query-only enforced at the SQLite layer). Single-maintainer repo,
-  #          hence the explicit commit pin.
-  # Schema:  verified against mnemosyne 3.5.0 — episodic_memory, working_memory,
-  #          triples, consolidation_log, and all memoria_* tables present;
-  #          memoria_stats is absent but the code guards missing tables.
-  # Auth:    config.json (PBKDF2-200k hash + auth_secret, auth_enabled:true) is
-  #          pre-provisioned on the volume at
-  #          plugin-data/mnemosyne-dashboard/config.json (owned 10000). Without
-  #          it the dashboard runs UNAUTH — a critical exposure (memory holds
-  #          transcripts/PII), so it MUST exist before a domain is attached.
-  # DB mount: READ-WRITE on purpose (not :ro). The store is WAL mode, and SQLite
-  #          cannot open a WAL db on a read-only dir — it must touch -shm. The
-  #          ?mode=ro connection string still enforces query-only. Runs as root
-  #          so it writes the EXISTING 10000-owned -shm/-wal via root-bypass
-  #          without recreating (rechowning) them; hermes starts first
-  #          (depends_on) and owns them, so ownership stays consistent.
-  # Domain:  Add via Coolify → Domains for this service (container port 8765).
-  mnemosyne-dashboard:
-    image: python:3.12-slim
-    container_name: hermes-mnemosyne-dashboard
-    restart: unless-stopped
-    # Start only after the gateway is healthy. The dashboard's boot-time
-    # apt-get + git clone is CPU/IO/network-heavy; running it concurrently with
-    # the gateway's (already slow) boot was enough contention to push the gateway
-    # past its healthcheck window and abort the deploy. Gating it here removes
-    # that contention, and ensures hermes owns/opens the WAL DB first.
-    depends_on:
-      hermes:
-        condition: service_healthy
-    command:
-      - bash
-      - -c
-      - |
-        set -e
-        apt-get update -qq && apt-get install -y --no-install-recommends -qq git ca-certificates >/dev/null
-        cd /tmp && rm -rf dash
-        git clone --quiet https://github.com/wysie/mnemosyne-dashboard.git dash
-        cd dash && git checkout --quiet 42ba6b710e339d4c670e79874b7138f1c0f4be2e
-        exec python server.py --host 0.0.0.0 --port 8765 --db /data/mnemosyne/mnemosyne.db
-    volumes:
-      # RW (not :ro) — WAL mode needs -shm access; ?mode=ro keeps it query-only.
-      - ~/.hermes/mnemosyne/data:/data/mnemosyne
-      # Plugin-data dir holds config.json (auth_secret, password hash). Persists
-      # across redeploys; pre-provisioned on the host with auth_enabled: true.
-      - ~/.hermes/plugin-data:/root/.hermes/plugin-data
-    environment:
-      - HERMES_HOME=/root/.hermes
-      - MNEMOSYNE_DASHBOARD_DB=/data/mnemosyne/mnemosyne.db
-      - MNEMOSYNE_DASHBOARD_HOST=0.0.0.0
-      - MNEMOSYNE_DASHBOARD_PORT=8765
-      - MNEMOSYNE_DASHBOARD_AUTH_ENABLED=true
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8765/api/auth/status\", timeout=2)" || exit 1'
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      # apt + git clone before the server binds; allow generous margin.
-      start_period: 90s
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: "0.5"
-
-volumes:
-  syncthing_config:
