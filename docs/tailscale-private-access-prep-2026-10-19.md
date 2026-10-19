@@ -184,11 +184,13 @@ tailscale ip -4
 
 Each phase is reversible on its own. Gated steps (Coolify proxy restart, deploys, Cloudflare and host changes) are run by the user.
 
-**Phase 0: cleanup (separate task, before or after)**
-- Remove cognee, mnemosyne-mcp, gbrain-life and paperclip in Coolify after exporting their volumes.
-- Repo change: drop `syncthing`, `mnemosyne-dashboard` and the mnemosyne install from the Hermes compose and Dockerfile.
-- Clean `gbrain-life` and `mnemosyne` refs from Hermes config and skills (Hermes-maintained).
-- Fewer names to move.
+**Phase 0: cleanup (done 2026-10-19, apart from the last three items)**
+- Deleted in Coolify: the cognee service, plus the gbrain-life and mnemosyne-mcp apps, along with their volumes. Paperclip is **stopped, not deleted**, and its volumes are kept.
+- Backups on the server are in `~/backups/cleanup-2026-10-19/`: `cognee_db.dump` and `gbrain_db.dump` (pg_dump `-Fc`), the cognee system/data volume tarballs, the gbrain home tarball, and `mnemosyne-mcp-volume.db`. The real mnemosyne store (443 MB) is still in the Hermes volume at `.hermes/mnemosyne/data`.
+- Repo change `52778776d`: removed syncthing, mnemosyne-dashboard, the mnemosyne provider and its patches, and the gbrain env from the Dockerfile and compose. It takes effect on the next Hermes redeploy. After that, check that the old `syncthing-…` and `mnemosyne-dashboard-…` containers are gone.
+- To do: in MetaMCP, delete the `cognee` and `mnemosyne` servers, namespaces and endpoints (their upstreams no longer exist).
+- To do: in claude.ai, remove the Cognee connector (it went through MetaMCP's `cognee-endpoint`).
+- To do (Hermes-maintained): drop the `memory.mnemosyne` block from config.yaml, the `mnemosyne-operations` skill, and any gbrain references.
 
 **Phase 1: Tailscale up, nothing private yet**
 1. Install Tailscale on the server (2.5); log in on the Mac and phone.
