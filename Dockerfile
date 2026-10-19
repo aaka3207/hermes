@@ -1,12 +1,12 @@
-# Pinned by digest, not :latest. This is v0.22.0 (the image `:latest`/`:stable`/
-# `:v0.22.0` all pointed at on 2026-10-14; manifest-list digest, linux/amd64 +
-# arm64). It replaces the 2026-10-08 pin sha256:9774f4f39a9b... (tagged
-# rc.4-v0.21.6; reports itself v0.21.6, the plain v0.21.6 tag is a different,
-# earlier build), where upstream's PM rework first shipped and broke several
+# Pinned by digest, not :latest. This is v0.22.2 (the image `:latest`/`:stable`/
+# `:v0.22.2` all pointed at on 2026-10-19; manifest-list digest, linux/amd64 +
+# arm64). It replaces the 2026-10-14 v0.22.0 pin sha256:c69536a39e88..., which
+# itself replaced the 2026-10-08 pin sha256:9774f4f39a9b... (tagged
+# rc.4-v0.21.6), where upstream's PM rework first shipped and broke several
 # things we had to work around (see
 # docs/hermes-pm-base-image-update-2026-10-09.md). Bump this deliberately,
 # after a test build, not by letting :latest move under us.
-FROM nousresearch/hermes-agent@sha256:c69536a39e885b8943329bda68cdf44492458b96aa74a212239bde9d2aeb406a
+FROM nousresearch/hermes-agent@sha256:36099926da316742423544e055d4734777105ffe6341873af5459b957d0c2919
 
 USER root
 # The base image stopped putting uv on PATH (it now lives under
