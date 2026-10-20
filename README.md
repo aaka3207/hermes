@@ -64,6 +64,7 @@ Everything here is in the `Dockerfile`, layered onto `nousresearch/hermes-agent:
 | `hindsight-client==0.6.1` (uv pip) | Client for the self-hosted Hindsight memory server | A selectable memory provider |
 | `faster-whisper==1.2.1` (uv pip) | Local, free speech-to-text for Discord voice | Pinned to the exact version Hermes' lazy-deps expects |
 | `mnemosyne-memory[embeddings]==3.0.0` + `sqlite-vec==0.1.9` (uv pip) | Local-first SQLite memory provider with semantic vector search | Bundled as a first-class provider (see Memory) |
+| **RTK command rewriting** (`/usr/local/bin/rtk` + bundled `rtk-rewrite` plugin) | Rewrites the agent's shell commands to compact equivalents (`cat x` → `rtk read x`), cutting the bytes each `terminal` call returns | Pinned release, SHA-256 verified. **Needs a one-time `plugins.enabled` opt-in per profile** — see [docs/rtk-command-rewrite.md](docs/rtk-command-rewrite.md) |
 | **openai SDK null-guard** (build-time patch, [#17](https://github.com/aaka3207/hermes/pull/17)) | Stops every Codex call from crashing on a null `response.output` | Patches the installed `openai` SDK. **Temporary** — remove when fixed upstream (see Operational notes) |
 | **Mnemosyne host-LLM lazy-register** (build-time patch, [#18](https://github.com/aaka3207/hermes/pull/18)) | Makes Mnemosyne actually route memory ops through Codex instead of falling back to lossy non-LLM summaries | Patches the installed `mnemosyne` package. **Temporary** — remove when fixed upstream (see Operational notes) |
 | **Codex transport tool-less fix** (build-time patch) | Stops the transport sending an empty `tools` field, which the Codex backend answers with a null `response.output` | Patches `/opt/hermes/agent/transports/codex.py` (the root-cause companion to the null-guard). **Temporary** — remove when fixed upstream (see Operational notes) |
@@ -434,6 +435,9 @@ docker logs -f hermes
 curl -fsS https://hermes-api.aakashe.org/health      # {"status":"ok",...}
 docker inspect --format '{{.State.Health.Status}}' hermes
 
+# is rtk rewriting commands? (see docs/rtk-command-rewrite.md)
+docker exec -u hermes -e HOME=/opt/data hermes rtk gain
+
 # memory
 docker exec -u hermes hermes hermes memory status
 docker exec -u hermes hermes hermes mnemosyne stats
@@ -451,6 +455,9 @@ Container names on the Coolify host are suffixed (e.g. `hermes-tgg4k0sc8wgocck08
 | `Dockerfile` | The custom image (upstream + the additions above) |
 | `docker-compose.yaml` | hermes + hermes-webui + syncthing services, volume, healthchecks, env |
 | `hub/` | Hermes hub content (SOP, changelog, notion link) |
+| `docker/` | Scripts the image copies in (boot guards, installers, build-time smoke checks) |
+| `docs/` | Operator docs for the pieces this repo adds |
+| `tests/` | Stdlib tests for the `docker/` scripts — `python3 tests/<name>.py` |
 | `skills/` | Custom agent skills |
 
 ## License
